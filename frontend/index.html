@@ -1,0 +1,1544 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NEXUS — Autonomous Software Engineering</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg: #0a0a0f;
+  --bg-1: #111118;
+  --bg-2: #16161f;
+  --bg-3: #1c1c28;
+  --border: rgba(255,255,255,0.07);
+  --border-hover: rgba(255,255,255,0.14);
+  --text: #f0f0f5;
+  --text-2: #9898b0;
+  --text-3: #5a5a70;
+  --accent: #6b6ef9;
+  --accent-dim: rgba(107,110,249,0.12);
+  --accent-glow: rgba(107,110,249,0.25);
+  --green: #22c55e;
+  --green-dim: rgba(34,197,94,0.1);
+  --yellow: #eab308;
+  --yellow-dim: rgba(234,179,8,0.1);
+  --red: #ef4444;
+  --red-dim: rgba(239,68,68,0.1);
+  --blue: #38bdf8;
+  --blue-dim: rgba(56,189,248,0.1);
+  --purple: #a78bfa;
+  --purple-dim: rgba(167,139,250,0.1);
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --sidebar-w: 220px;
+  --font: 'Inter', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 99px; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  height: 100vh;
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-logo {
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.logo-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.logo-icon {
+  width: 30px;
+  height: 30px;
+  background: linear-gradient(135deg, #6b6ef9, #a78bfa);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -0.5px;
+}
+.logo-name { font-size: 15px; font-weight: 600; color: var(--text); letter-spacing: 0.3px; }
+.logo-sub { font-size: 11px; color: var(--text-3); letter-spacing: 0.5px; padding-left: 40px; }
+.sidebar-nav { flex: 1; padding: 10px 10px; overflow-y: auto; }
+.nav-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 12px 8px 6px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 400;
+  user-select: none;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+}
+.nav-item:hover { background: var(--bg-3); color: var(--text); }
+.nav-item.active { background: var(--accent-dim); color: var(--accent); }
+.nav-item svg { width: 15px; height: 15px; flex-shrink: 0; opacity: 0.8; }
+.nav-item.active svg { opacity: 1; }
+.nav-badge {
+  margin-left: auto;
+  font-size: 10px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 99px;
+  font-weight: 500;
+}
+.sidebar-footer {
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+.server-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: background 0.3s;
+  flex-shrink: 0;
+}
+.status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-dot.pulse { animation: pulse-dot 2s infinite; }
+@keyframes pulse-dot {
+  0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(34,197,94,0); }
+}
+
+/* ── Main ── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+
+/* ── Topbar ── */
+.topbar {
+  height: 54px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 16px;
+  background: var(--bg-1);
+  flex-shrink: 0;
+}
+.topbar-title { font-size: 14px; font-weight: 500; color: var(--text); flex: 1; }
+.topbar-subtitle { font-size: 12px; color: var(--text-3); }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+  white-space: nowrap;
+  font-family: var(--font);
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.btn-primary:hover { background: #7c7ffa; border-color: #7c7ffa; }
+.btn-primary:disabled { background: var(--bg-3); border-color: var(--border); color: var(--text-3); cursor: not-allowed; }
+.btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+  border-color: var(--border);
+}
+.btn-ghost:hover { background: var(--bg-3); color: var(--text); border-color: var(--border-hover); }
+
+/* ── Content ── */
+.content { flex: 1; overflow-y: auto; }
+.page { display: none; padding: 24px; }
+.page.active { display: block; }
+
+/* ── Metric cards ── */
+.metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px; }
+.metric-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  position: relative;
+  overflow: hidden;
+}
+.metric-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.metric-card.accent::before { background: var(--accent); }
+.metric-card.green::before { background: var(--green); }
+.metric-card.yellow::before { background: var(--yellow); }
+.metric-card.purple::before { background: var(--purple); }
+.metric-label {
+  font-size: 11px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+.metric-value { font-size: 26px; font-weight: 600; color: var(--text); line-height: 1; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+.metric-sub { font-size: 11px; color: var(--text-3); }
+.metric-icon {
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+.metric-card.accent .metric-icon { background: var(--accent-dim); color: var(--accent); }
+.metric-card.green .metric-icon { background: var(--green-dim); color: var(--green); }
+.metric-card.yellow .metric-icon { background: var(--yellow-dim); color: var(--yellow); }
+.metric-card.purple .metric-icon { background: var(--purple-dim); color: var(--purple); }
+
+/* ── Section header ── */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.section-title { font-size: 13px; font-weight: 500; color: var(--text); }
+.section-sub { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+
+/* ── Submit panel ── */
+.submit-panel {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+  margin-bottom: 24px;
+}
+.submit-panel h3 { font-size: 13px; font-weight: 500; color: var(--text-2); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.input-group { display: flex; gap: 10px; }
+.url-input {
+  flex: 1;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 14px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--mono);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.url-input::placeholder { color: var(--text-3); font-family: var(--font); }
+.url-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.url-input.error { border-color: var(--red); }
+.err-msg { font-size: 12px; color: var(--red); margin-top: 8px; display: none; }
+.err-msg.show { display: block; }
+
+/* ── Pipeline card ── */
+.pipeline-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+  margin-bottom: 24px;
+  display: none;
+}
+.pipeline-card.show { display: block; }
+.pipeline-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.pipeline-title { font-size: 14px; font-weight: 500; color: var(--text); flex: 1; }
+.pipeline-issue {
+  font-size: 12px;
+  color: var(--text-3);
+  font-family: var(--mono);
+  margin-top: 2px;
+}
+.status-pill {
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.pill-queued { background: var(--bg-3); color: var(--text-3); }
+.pill-running { background: var(--accent-dim); color: var(--accent); }
+.pill-completed { background: var(--green-dim); color: var(--green); }
+.pill-failed { background: var(--red-dim); color: var(--red); }
+
+/* ── Pipeline steps ── */
+.pipeline-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 24px;
+}
+.p-step { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 90px; }
+.p-step-node {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 0.3s;
+  position: relative;
+}
+.p-step.done .p-step-node { border-color: var(--green); background: var(--green-dim); }
+.p-step.active .p-step-node { border-color: var(--accent); background: var(--accent-dim); animation: spin-border 2s linear infinite; }
+.p-step.failed .p-step-node { border-color: var(--red); background: var(--red-dim); }
+@keyframes spin-border {
+  0% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50% { box-shadow: 0 0 0 5px transparent; }
+}
+.p-step-label { font-size: 10px; color: var(--text-3); text-align: center; font-weight: 500; letter-spacing: 0.3px; }
+.p-step.active .p-step-label { color: var(--accent); }
+.p-step.done .p-step-label { color: var(--green); }
+.p-connector { flex: 1; height: 1.5px; background: var(--border); margin-bottom: 24px; transition: background 0.4s; }
+.p-connector.done { background: var(--green); }
+
+/* ── Plan items ── */
+.plan-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 20px; }
+.plan-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+.plan-num {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.plan-desc { font-size: 12px; color: var(--text); }
+.plan-file { font-size: 11px; color: var(--text-3); font-family: var(--mono); margin-top: 2px; }
+
+/* ── Results grid ── */
+.results-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+.result-metric {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+.result-metric-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 6px; }
+.result-metric-val { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.val-green { color: var(--green); }
+.val-yellow { color: var(--yellow); }
+.val-red { color: var(--red); }
+
+/* ── Patch viewer ── */
+.patch-wrap { margin-top: 4px; }
+.patch-label {
+  font-size: 11px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.patch-code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.patch-add { color: var(--green); }
+.patch-rm { color: var(--red); }
+.patch-hdr { color: var(--accent); }
+.patch-meta { color: var(--text-3); }
+
+/* ── Task explanation ── */
+.explanation-box {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.7;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+}
+
+/* ── Tasks table ── */
+.table-wrap {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.table-header {
+  display: flex;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  background: var(--bg-2);
+}
+.search-input {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text);
+  outline: none;
+  width: 220px;
+  font-family: var(--font);
+  transition: border-color 0.15s;
+}
+.search-input:focus { border-color: var(--border-hover); }
+.search-input::placeholder { color: var(--text-3); }
+.filter-btns { display: flex; gap: 6px; margin-left: auto; }
+.filter-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  transition: all 0.15s;
+  font-family: var(--font);
+}
+.filter-btn:hover, .filter-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  padding: 10px 20px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+  cursor: pointer;
+}
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: var(--bg-3); }
+td {
+  padding: 12px 20px;
+  font-size: 12px;
+  color: var(--text-2);
+  vertical-align: middle;
+}
+.td-title { color: var(--text); font-size: 13px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.td-repo { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.td-mono { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.badge-queued { background: var(--bg-3); color: var(--text-3); border: 1px solid var(--border); }
+.badge-cloning, .badge-indexing, .badge-retrieving, .badge-generating { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(107,110,249,0.2); }
+.badge-completed { background: var(--green-dim); color: var(--green); border: 1px solid rgba(34,197,94,0.2); }
+.badge-failed { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
+.score-bar-wrap { width: 80px; background: var(--bg-3); border-radius: 99px; height: 4px; overflow: hidden; }
+.score-bar { height: 100%; border-radius: 99px; transition: width 0.4s; }
+.score-high { background: var(--green); }
+.score-mid { background: var(--yellow); }
+.score-low { background: var(--red); }
+.empty-row td { text-align: center; padding: 40px; color: var(--text-3); }
+
+/* ── Metrics page ── */
+.metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.chart-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+}
+.chart-card h4 { font-size: 12px; font-weight: 500; color: var(--text-2); margin-bottom: 16px; }
+.bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 120px; padding-bottom: 8px; }
+.bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
+.bar-fill { width: 100%; border-radius: 4px 4px 0 0; min-height: 2px; transition: height 0.4s; background: var(--accent); opacity: 0.8; }
+.bar-label { font-size: 9px; color: var(--text-3); text-align: center; margin-top: 4px; }
+.pipeline-flow-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  grid-column: span 2;
+}
+.flow-agents { display: flex; align-items: center; gap: 0; margin-top: 16px; }
+.flow-agent {
+  flex: 1;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  text-align: center;
+}
+.flow-agent-icon { font-size: 22px; margin-bottom: 6px; }
+.flow-agent-name { font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+.flow-agent-desc { font-size: 11px; color: var(--text-3); }
+.flow-arrow {
+  padding: 0 6px;
+  color: var(--text-3);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+/* ── Webhook page ── */
+.webhook-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 16px;
+}
+.webhook-url-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+}
+.copy-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid rgba(107,110,249,0.2);
+  cursor: pointer;
+  font-family: var(--font);
+  white-space: nowrap;
+}
+.copy-btn:hover { background: var(--accent); color: #fff; }
+.step-list { counter-reset: steps; display: flex; flex-direction: column; gap: 10px; }
+.step-item { display: flex; align-items: flex-start; gap: 12px; font-size: 13px; color: var(--text-2); line-height: 1.6; }
+.step-num {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent-dim); border: 1px solid var(--accent);
+  color: var(--accent); font-size: 11px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; margin-top: 1px;
+}
+code {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-3);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--purple);
+}
+.label-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.label-pill {
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  background: var(--green-dim);
+  color: var(--green);
+  border: 1px solid rgba(34,197,94,0.2);
+  font-family: var(--mono);
+}
+
+/* ── Eval page ── */
+.eval-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 16px;
+}
+.cmd-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  margin: 12px 0;
+}
+.cmd-box .cmd-prompt { color: var(--green); margin-right: 8px; }
+.benchmarks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+.bench-card {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+}
+.bench-name { font-size: 11px; color: var(--text-3); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+.bench-score { font-size: 24px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.bench-label { font-size: 10px; color: var(--text-3); }
+
+/* ── Animations ── */
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.fade-in { animation: fadeIn 0.2s ease forwards; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- ── Sidebar ── -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark">
+      <div class="logo-icon">NX</div>
+      <span class="logo-name">NEXUS</span>
+    </div>
+    <div class="logo-sub">AUTONOMOUS SWE PLATFORM</div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">Platform</div>
+    <button class="nav-item active" onclick="showPage('dashboard')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </button>
+    <button class="nav-item" onclick="showPage('tasks')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      Tasks
+      <span class="nav-badge" id="task-count-badge">0</span>
+    </button>
+    <button class="nav-item" onclick="showPage('metrics')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Metrics
+    </button>
+
+    <div class="nav-section-label">Integrations</div>
+    <button class="nav-item" onclick="showPage('webhook')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      GitHub App
+    </button>
+    <button class="nav-item" onclick="showPage('eval')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      SWE-bench Eval
+    </button>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div style="display:flex;align-items:center;gap:9px;padding:8px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px">
+      <div style="width:28px;height:28px;border-radius:50%;background:var(--accent-dim);border:1px solid var(--accent);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--accent);flex-shrink:0" id="user-avatar">?</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="user-menu-label">Loading...</div>
+        <div style="font-size:10px;display:none;padding:1px 6px;border-radius:99px;background:var(--accent-dim);color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-top:2px;width:fit-content" id="user-role-badge">engineer</div>
+      </div>
+      <button onclick="doLogout()" title="Sign out" style="background:none;border:none;cursor:pointer;color:var(--text-3);padding:4px;border-radius:4px;display:flex;align-items:center" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-3)'">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>
+    </div>
+    <div class="server-status">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Connecting...</span>
+    </div>
+  </div>
+</aside>
+
+<!-- ── Main Content ── -->
+<div class="main">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <div>
+      <div class="topbar-title" id="topbar-title">Dashboard</div>
+      <div class="topbar-subtitle" id="topbar-sub">Multi-Agent Autonomous Software Engineering Platform</div>
+    </div>
+    <button class="btn btn-ghost" onclick="refreshAll()" title="Refresh">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      Refresh
+    </button>
+    <button class="btn btn-primary" onclick="showPage('dashboard'); focusInput()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New Task
+    </button>
+  </div>
+
+  <div class="content">
+
+    <!-- ══ DASHBOARD PAGE ══ -->
+    <div class="page active" id="page-dashboard">
+
+      <!-- Metric Cards -->
+      <div class="metric-grid">
+        <div class="metric-card accent">
+          <div class="metric-icon">⚡</div>
+          <div class="metric-label">Total Tasks</div>
+          <div class="metric-value" id="m-total">—</div>
+          <div class="metric-sub">All time</div>
+        </div>
+        <div class="metric-card green">
+          <div class="metric-icon">✓</div>
+          <div class="metric-label">Success Rate</div>
+          <div class="metric-value" id="m-rate">—</div>
+          <div class="metric-sub" id="m-completed-sub">0 completed</div>
+        </div>
+        <div class="metric-card yellow">
+          <div class="metric-icon">🎯</div>
+          <div class="metric-label">Avg Confidence</div>
+          <div class="metric-value" id="m-conf">—</div>
+          <div class="metric-sub">Engineer agent</div>
+        </div>
+        <div class="metric-card purple">
+          <div class="metric-icon">🔍</div>
+          <div class="metric-label">Review Pass Rate</div>
+          <div class="metric-value" id="m-review">—</div>
+          <div class="metric-sub">Reviewer agent</div>
+        </div>
+      </div>
+
+      <!-- Submit Panel -->
+      <div class="submit-panel">
+        <h3>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          Submit a GitHub issue for autonomous patch generation
+        </h3>
+        <div class="input-group">
+          <input
+            class="url-input"
+            id="url-input"
+            type="text"
+            placeholder="https://github.com/owner/repo/issues/123"
+            onkeydown="if(event.key==='Enter') submitTask()"
+          />
+          <button class="btn btn-primary" id="submit-btn" onclick="submitTask()">
+            Generate Patch
+          </button>
+        </div>
+        <div class="err-msg" id="err-msg"></div>
+      </div>
+
+      <!-- Live Pipeline -->
+      <div class="pipeline-card" id="pipeline-card">
+        <div class="pipeline-header">
+          <div>
+            <div class="pipeline-title" id="pipe-title">Processing issue...</div>
+            <div class="pipeline-issue" id="pipe-issue"></div>
+          </div>
+          <span class="status-pill" id="pipe-pill">queued</span>
+        </div>
+
+        <div class="pipeline-steps">
+          <div class="p-step" id="ps-clone">
+            <div class="p-step-node">📥</div>
+            <div class="p-step-label">Clone & Index</div>
+          </div>
+          <div class="p-connector" id="pc-1"></div>
+          <div class="p-step" id="ps-plan">
+            <div class="p-step-node">🧠</div>
+            <div class="p-step-label">Planner</div>
+          </div>
+          <div class="p-connector" id="pc-2"></div>
+          <div class="p-step" id="ps-eng">
+            <div class="p-step-node">⚙️</div>
+            <div class="p-step-label">Engineer</div>
+          </div>
+          <div class="p-connector" id="pc-3"></div>
+          <div class="p-step" id="ps-rev">
+            <div class="p-step-node">🔍</div>
+            <div class="p-step-label">Reviewer</div>
+          </div>
+          <div class="p-connector" id="pc-4"></div>
+          <div class="p-step" id="ps-done">
+            <div class="p-step-node">✅</div>
+            <div class="p-step-label">Complete</div>
+          </div>
+        </div>
+
+        <div id="plan-section" style="display:none" class="fade-in">
+          <div class="section-header"><span class="section-title">Agent Plan</span></div>
+          <div class="plan-list" id="plan-list"></div>
+        </div>
+
+        <div id="result-section" style="display:none" class="fade-in">
+          <div class="results-row">
+            <div class="result-metric">
+              <div class="result-metric-label">Engineer Confidence</div>
+              <div class="result-metric-val" id="r-conf">—</div>
+            </div>
+            <div class="result-metric">
+              <div class="result-metric-label">Reviewer Score</div>
+              <div class="result-metric-val" id="r-rev">—</div>
+            </div>
+          </div>
+
+          <div id="explanation-wrap" style="display:none">
+            <div class="result-metric-label" style="margin-bottom:8px">Analysis</div>
+            <div class="explanation-box" id="explanation-box"></div>
+          </div>
+
+          <div class="patch-wrap">
+            <div class="patch-label">
+              <span>Generated Patch</span>
+              <button class="copy-btn" onclick="copyPatch()">Copy patch</button>
+            </div>
+            <div class="patch-code" id="patch-code"></div>
+          </div>
+        </div>
+
+        <div id="pipe-error" style="display:none;padding:10px 14px;background:var(--red-dim);border:1px solid rgba(239,68,68,0.2);border-radius:var(--radius-sm);font-size:12px;color:var(--red);margin-top:12px;"></div>
+      </div>
+
+      <!-- Recent Tasks -->
+      <div class="section-header">
+        <div>
+          <div class="section-title">Recent tasks</div>
+          <div class="section-sub">Click a row to view results</div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Issue</th>
+              <th>Repository</th>
+              <th>Status</th>
+              <th>Confidence</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody id="dash-task-body">
+            <tr class="empty-row"><td colspan="5">No tasks yet. Submit a GitHub issue above.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ══ TASKS PAGE ══ -->
+    <div class="page" id="page-tasks">
+      <div class="table-wrap">
+        <div class="table-header">
+          <span class="section-title">All tasks</span>
+          <input class="search-input" id="task-search" type="text" placeholder="Search by title or repo..." oninput="filterTasks()" />
+          <div class="filter-btns">
+            <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+            <button class="filter-btn" onclick="setFilter('completed',this)">Completed</button>
+            <button class="filter-btn" onclick="setFilter('failed',this)">Failed</button>
+            <button class="filter-btn" onclick="setFilter('running',this)">Running</button>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Issue</th>
+              <th>Repository</th>
+              <th>Status</th>
+              <th>Confidence</th>
+              <th>Review</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody id="all-task-body">
+            <tr class="empty-row"><td colspan="6">Loading tasks...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ══ METRICS PAGE ══ -->
+    <div class="page" id="page-metrics">
+      <div class="metric-grid" style="margin-bottom:24px">
+        <div class="metric-card accent">
+          <div class="metric-icon">⚡</div>
+          <div class="metric-label">Total Tasks</div>
+          <div class="metric-value" id="mm-total">—</div>
+          <div class="metric-sub">All time</div>
+        </div>
+        <div class="metric-card green">
+          <div class="metric-icon">✓</div>
+          <div class="metric-label">Success Rate</div>
+          <div class="metric-value" id="mm-rate">—</div>
+          <div class="metric-sub" id="mm-sub"></div>
+        </div>
+        <div class="metric-card yellow">
+          <div class="metric-icon">⏱</div>
+          <div class="metric-label">Avg Completion</div>
+          <div class="metric-value" id="mm-time">—</div>
+          <div class="metric-sub">seconds</div>
+        </div>
+        <div class="metric-card purple">
+          <div class="metric-icon">💰</div>
+          <div class="metric-label">Total Cost</div>
+          <div class="metric-value" id="mm-cost">—</div>
+          <div class="metric-sub">estimated USD</div>
+        </div>
+      </div>
+
+      <div class="pipeline-flow-card" style="margin-bottom:16px">
+        <div class="section-title" style="margin-bottom:4px">Agent pipeline</div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:16px">Planner → Engineer → Reviewer → Reflector (self-healing loop, max 2x)</div>
+        <div class="flow-agents">
+          <div class="flow-agent">
+            <div class="flow-agent-icon">🧠</div>
+            <div class="flow-agent-name">Planner</div>
+            <div class="flow-agent-desc">Decomposes issue into 2–4 subtasks</div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-agent">
+            <div class="flow-agent-icon">⚙️</div>
+            <div class="flow-agent-name">Engineer</div>
+            <div class="flow-agent-desc">Generates unified diff patch via RAG</div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-agent">
+            <div class="flow-agent-icon">🔍</div>
+            <div class="flow-agent-name">Reviewer</div>
+            <div class="flow-agent-desc">Scores patch 0–1 on 4 dimensions</div>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-agent" style="border-color:rgba(167,139,250,0.3)">
+            <div class="flow-agent-icon">🔄</div>
+            <div class="flow-agent-name">Reflector</div>
+            <div class="flow-agent-desc">Self-improves on rejection (≤ 2x)</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="metrics-grid">
+        <div class="chart-card">
+          <h4>Daily tasks (last 7 days)</h4>
+          <div class="bar-chart" id="daily-chart">
+            <div style="color:var(--text-3);font-size:12px;margin:auto">Loading...</div>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h4>Top repositories</h4>
+          <div id="top-repos" style="margin-top:4px">
+            <div style="color:var(--text-3);font-size:12px">Loading...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ WEBHOOK PAGE ══ -->
+    <div class="page" id="page-webhook">
+      <div class="webhook-card">
+        <div class="section-title" style="margin-bottom:6px">GitHub App webhook</div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:18px">Auto-trigger NEXUS when issues are opened on any repository.</div>
+
+        <div style="font-size:13px;font-weight:500;color:var(--text-2);margin-bottom:6px">Webhook URL</div>
+        <div class="webhook-url-box">
+          <span id="webhook-url-text">http://127.0.0.1:8000/api/v1/webhook/github</span>
+          <button class="copy-btn" onclick="copyWebhook()">Copy URL</button>
+        </div>
+
+        <div style="font-size:13px;font-weight:500;color:var(--text-2);margin:18px 0 10px">Setup steps</div>
+        <div class="step-list">
+          <div class="step-item"><div class="step-num">1</div>Go to <strong>GitHub → Settings → Developer settings → GitHub Apps → New GitHub App</strong></div>
+          <div class="step-item"><div class="step-num">2</div>Set the webhook URL above. Set content type to <code>application/json</code>.</div>
+          <div class="step-item"><div class="step-num">3</div>Subscribe to <code>Issues</code> events only.</div>
+          <div class="step-item"><div class="step-num">4</div>Install the app on your repository. NEXUS will auto-trigger on every new issue or when these labels are added:</div>
+        </div>
+        <div class="label-pills">
+          <span class="label-pill">nexus</span>
+          <span class="label-pill">auto-fix</span>
+          <span class="label-pill">nexus-fix</span>
+          <span class="label-pill">ai-fix</span>
+        </div>
+      </div>
+
+      <div class="webhook-card">
+        <div class="section-title" style="margin-bottom:12px">Webhook health</div>
+        <div id="webhook-health" style="font-size:13px;color:var(--text-3)">Checking...</div>
+      </div>
+    </div>
+
+    <!-- ══ EVAL PAGE ══ -->
+    <div class="page" id="page-eval">
+      <div class="eval-card">
+        <div class="section-title" style="margin-bottom:6px">SWE-bench Lite evaluation</div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:18px">Run NEXUS against real GitHub issues with known ground-truth patches. Measures autonomous resolution rate.</div>
+
+        <div style="font-size:13px;font-weight:500;color:var(--text-2);margin-bottom:6px">Run the evaluator</div>
+        <div class="cmd-box">
+          <span class="cmd-prompt">$</span>pip install datasets
+        </div>
+        <div class="cmd-box">
+          <span class="cmd-prompt">$</span>python evals/swebench_eval.py --limit 10 --output evals/results.json
+        </div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:8px">Results are saved to <code>evals/results.json</code> with per-instance scores.</div>
+
+        <div style="font-size:13px;font-weight:500;color:var(--text-2);margin:20px 0 12px">Performance context</div>
+        <div class="benchmarks">
+          <div class="bench-card">
+            <div class="bench-name">SWE-agent</div>
+            <div class="bench-score">12.5%</div>
+            <div class="bench-label">SWE-bench Lite</div>
+          </div>
+          <div class="bench-card" style="border-color:rgba(107,110,249,0.3)">
+            <div class="bench-name">NEXUS (yours)</div>
+            <div class="bench-score" id="your-score">Run eval →</div>
+            <div class="bench-label">SWE-bench Lite</div>
+          </div>
+          <div class="bench-card">
+            <div class="bench-name">Devin</div>
+            <div class="bench-score">13.8%</div>
+            <div class="bench-label">SWE-bench Lite</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="eval-card">
+        <div class="section-title" style="margin-bottom:12px">What is SWE-bench?</div>
+        <div style="font-size:13px;color:var(--text-2);line-height:1.8">
+          SWE-bench is a benchmark of 2,294 real GitHub issues from popular Python repos (Django, Flask, Requests, etc.) with verified ground-truth patches. SWE-bench Lite is a curated subset of 300 instances designed for faster evaluation. Every major AI lab (OpenAI, Anthropic, Google) uses it to measure code generation capability. A resolution rate above 5% on Lite as a solo project is considered exceptional.
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = 'http://127.0.0.1:8000/api/v1';
+let allTasks = [];
+let taskFilter = 'all';
+let pollingId = null;
+let activePipelineId = null;
+let currentPatch = '';
+
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+function getToken() { return localStorage.getItem('nexus_token'); }
+function getUser()  { try { return JSON.parse(localStorage.getItem('nexus_user')); } catch { return null; } }
+
+function authHeaders() {
+  const token = getToken();
+  return token ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+}
+
+async function apiFetch(path, opts = {}) {
+  const r = await fetch(API + path, {
+    ...opts,
+    headers: { ...authHeaders(), ...(opts.headers || {}) },
+  });
+  if (r.status === 401) { doLogout(); return null; }
+  return r;
+}
+
+function doLogout() {
+  localStorage.removeItem('nexus_token');
+  localStorage.removeItem('nexus_user');
+  window.location.href = 'login.html';
+}
+
+// Redirect to login if not authenticated
+(function checkAuth() {
+  if (!getToken()) { window.location.href = 'login.html'; }
+  const user = getUser();
+  if (user) {
+    const el = document.getElementById('user-menu-label');
+    if (el) el.textContent = user.full_name || user.username;
+    const roleEl = document.getElementById('user-role-badge');
+    if (roleEl) { roleEl.textContent = user.role; roleEl.style.display = 'inline-flex'; }
+    const avatarEl = document.getElementById('user-avatar');
+    if (avatarEl) {
+      const name = user.full_name || user.username || '?';
+      avatarEl.textContent = name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2);
+    }
+  }
+})();
+
+const pages = {
+  dashboard: { title: 'Dashboard', sub: 'Multi-Agent Autonomous Software Engineering Platform' },
+  tasks: { title: 'All tasks', sub: 'Browse and inspect all submitted tasks' },
+  metrics: { title: 'Metrics', sub: 'Platform performance and analytics' },
+  webhook: { title: 'GitHub App', sub: 'Auto-trigger NEXUS via webhooks' },
+  eval: { title: 'SWE-bench Eval', sub: 'Benchmark NEXUS against real GitHub issues' },
+};
+
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => {
+    if (n.getAttribute('onclick')?.includes("'" + id + "'")) n.classList.add('active');
+  });
+  document.getElementById('topbar-title').textContent = pages[id]?.title || id;
+  document.getElementById('topbar-sub').textContent = pages[id]?.sub || '';
+  if (id === 'tasks') loadAllTasks();
+  if (id === 'metrics') loadMetrics();
+  if (id === 'webhook') loadWebhookHealth();
+}
+
+function focusInput() {
+  setTimeout(() => document.getElementById('url-input')?.focus(), 100);
+}
+
+async function checkHealth() {
+  try {
+    const r = await fetch(API + '/health', { signal: AbortSignal.timeout(3000), headers: authHeaders() });
+    if (r.ok) {
+      const dot = document.getElementById('status-dot');
+      dot.classList.add('online', 'pulse');
+      document.getElementById('status-text').textContent = 'API connected';
+    }
+  } catch {
+    document.getElementById('status-text').textContent = 'Server offline';
+  }
+}
+
+async function submitTask() {
+  const url = document.getElementById('url-input').value.trim();
+  const errEl = document.getElementById('err-msg');
+  const inputEl = document.getElementById('url-input');
+  errEl.classList.remove('show');
+  inputEl.classList.remove('error');
+
+  if (!url.match(/github\.com\/.+\/issues\/\d+/)) {
+    errEl.textContent = 'Enter a valid GitHub issue URL (e.g. github.com/owner/repo/issues/123)';
+    errEl.classList.add('show');
+    inputEl.classList.add('error');
+    return;
+  }
+
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  try {
+    const r = await apiFetch('/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ github_issue_url: url, use_hyde: true }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'Submission failed');
+
+    document.getElementById('url-input').value = '';
+    activePipelineId = data.task_id;
+    openPipeline(data);
+    startPolling(data.task_id);
+    loadDashTasks();
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.classList.add('show');
+    inputEl.classList.add('error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Patch';
+  }
+}
+
+function openPipeline(task) {
+  const card = document.getElementById('pipeline-card');
+  card.classList.add('show');
+  currentPatch = '';
+  document.getElementById('plan-section').style.display = 'none';
+  document.getElementById('result-section').style.display = 'none';
+  document.getElementById('pipe-error').style.display = 'none';
+  ['ps-clone','ps-plan','ps-eng','ps-rev','ps-done'].forEach(id => {
+    const el = document.getElementById(id);
+    el.className = 'p-step';
+  });
+  ['pc-1','pc-2','pc-3','pc-4'].forEach(id => {
+    document.getElementById(id).className = 'p-connector';
+  });
+  updatePipeline(task);
+}
+
+function updatePipeline(task) {
+  const title = task.issue_title || 'Analyzing issue...';
+  document.getElementById('pipe-title').textContent = title;
+  document.getElementById('pipe-issue').textContent = task.github_issue_url;
+
+  const pill = document.getElementById('pipe-pill');
+  const running = ['cloning','indexing','retrieving','generating'];
+  pill.className = 'status-pill';
+  if (running.includes(task.status)) { pill.classList.add('pill-running'); pill.textContent = task.current_step || task.status; }
+  else if (task.status === 'completed') { pill.classList.add('pill-completed'); pill.textContent = 'Completed'; }
+  else if (task.status === 'failed') { pill.classList.add('pill-failed'); pill.textContent = 'Failed'; }
+  else { pill.classList.add('pill-queued'); pill.textContent = 'Queued'; }
+
+  const stepMap = {
+    queued:     { active: 'ps-clone', done: [], conn: [] },
+    cloning:    { active: 'ps-clone', done: [], conn: [] },
+    indexing:   { active: 'ps-clone', done: [], conn: [] },
+    retrieving: { active: 'ps-plan',  done: ['ps-clone'], conn: ['pc-1'] },
+    generating: { active: 'ps-eng',   done: ['ps-clone','ps-plan'], conn: ['pc-1','pc-2'] },
+    completed:  { active: null, done: ['ps-clone','ps-plan','ps-eng','ps-rev','ps-done'], conn: ['pc-1','pc-2','pc-3','pc-4'] },
+    failed:     { active: null, done: [] },
+  };
+
+  const sm = stepMap[task.status] || stepMap.queued;
+  ['ps-clone','ps-plan','ps-eng','ps-rev','ps-done'].forEach(id => {
+    const el = document.getElementById(id);
+    el.className = 'p-step';
+    if (sm.active === id) el.classList.add('active');
+    if ((sm.done||[]).includes(id)) el.classList.add('done');
+    if (task.status === 'failed') el.classList.add('failed');
+  });
+  ['pc-1','pc-2','pc-3','pc-4'].forEach(id => {
+    const el = document.getElementById(id);
+    el.className = 'p-connector';
+    if ((sm.conn||[]).includes(id)) el.classList.add('done');
+  });
+
+  if (task.plan && task.plan.length) {
+    document.getElementById('plan-section').style.display = 'block';
+    document.getElementById('plan-list').innerHTML = task.plan.map((s,i) => `
+      <div class="plan-item">
+        <div class="plan-num">${i+1}</div>
+        <div>
+          <div class="plan-desc">${s.description}</div>
+          <div class="plan-file">📁 ${s.file_hint}</div>
+        </div>
+      </div>`).join('');
+  }
+
+  if (task.status === 'completed') {
+    document.getElementById('result-section').style.display = 'block';
+    const conf = task.confidence ?? 0;
+    const rev = task.review_score ?? 0;
+    const confEl = document.getElementById('r-conf');
+    confEl.textContent = (conf * 100).toFixed(0) + '%';
+    confEl.className = 'result-metric-val ' + scoreClass(conf);
+    const revEl = document.getElementById('r-rev');
+    revEl.textContent = (rev * 100).toFixed(0) + '%';
+    revEl.className = 'result-metric-val ' + scoreClass(rev);
+
+    if (task.patch_explanation) {
+      document.getElementById('explanation-wrap').style.display = 'block';
+      document.getElementById('explanation-box').textContent = task.patch_explanation;
+    }
+    currentPatch = task.generated_patch || '';
+    renderPatch(currentPatch);
+  }
+
+  if (task.status === 'failed') {
+    const errEl = document.getElementById('pipe-error');
+    errEl.textContent = task.error_message || 'Pipeline failed.';
+    errEl.style.display = 'block';
+  }
+}
+
+function scoreClass(v) {
+  if (v >= 0.75) return 'val-green';
+  if (v >= 0.5) return 'val-yellow';
+  return 'val-red';
+}
+
+function renderPatch(patch) {
+  const el = document.getElementById('patch-code');
+  if (!patch || patch.length < 5) { el.innerHTML = '<span style="color:var(--text-3)">No patch generated yet.</span>'; return; }
+  el.innerHTML = patch.split('\n').map(line => {
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff '))
+      return `<span class="patch-meta">${esc(line)}</span>`;
+    if (line.startsWith('@@')) return `<span class="patch-hdr">${esc(line)}</span>`;
+    if (line.startsWith('+')) return `<span class="patch-add">${esc(line)}</span>`;
+    if (line.startsWith('-')) return `<span class="patch-rm">${esc(line)}</span>`;
+    return esc(line);
+  }).join('\n');
+}
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function copyPatch() {
+  if (currentPatch) navigator.clipboard?.writeText(currentPatch).then(() => {
+    const btn = event.target; btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy patch', 1500);
+  });
+}
+
+function copyWebhook() {
+  const url = document.getElementById('webhook-url-text').textContent;
+  navigator.clipboard?.writeText(url).then(() => {
+    const btn = event.target; btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy URL', 1500);
+  });
+}
+
+function startPolling(taskId) {
+  if (pollingId) clearInterval(pollingId);
+  pollingId = setInterval(async () => {
+    try {
+      const r = await apiFetch('/tasks/' + taskId);
+      if (!r) return;
+      const task = await r.json();
+      if (task.task_id === activePipelineId) updatePipeline(task);
+      if (['completed','failed'].includes(task.status)) {
+        clearInterval(pollingId);
+        loadDashTasks();
+        loadMetrics();
+      }
+    } catch {}
+  }, 2500);
+}
+
+async function loadDashTasks() {
+  try {
+    const r = await apiFetch('/tasks?limit=10');
+    if (!r) return;
+    const tasks = await r.json();
+    allTasks = tasks;
+    document.getElementById('task-count-badge').textContent = tasks.length;
+    renderDashTasks(tasks.slice(0, 8));
+  } catch {}
+}
+
+function renderDashTasks(tasks) {
+  const tbody = document.getElementById('dash-task-body');
+  if (!tasks.length) { tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No tasks yet.</td></tr>'; return; }
+  tbody.innerHTML = tasks.map(t => {
+    const conf = t.confidence != null ? (t.confidence * 100).toFixed(0) + '%' : '—';
+    const confColor = t.confidence != null ? (t.confidence >= 0.75 ? 'var(--green)' : t.confidence >= 0.5 ? 'var(--yellow)' : 'var(--red)') : 'var(--text-3)';
+    return `<tr onclick="loadTask('${t.task_id}')">
+      <td class="td-title">${t.issue_title || t.github_issue_url}</td>
+      <td class="td-repo">${extractRepo(t.github_issue_url)}</td>
+      <td><span class="badge badge-${t.status}">${t.status}</span></td>
+      <td><span style="color:${confColor};font-size:13px;font-weight:500">${conf}</span></td>
+      <td class="td-mono">${timeAgo(t.created_at)}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadAllTasks() {
+  try {
+    const r = await apiFetch('/tasks?limit=100');
+    if (!r) return;
+    allTasks = await r.json();
+    document.getElementById('task-count-badge').textContent = allTasks.length;
+    filterTasks();
+  } catch {
+    document.getElementById('all-task-body').innerHTML = '<tr class="empty-row"><td colspan="6">Failed to load tasks.</td></tr>';
+  }
+}
+
+function setFilter(f, btn) {
+  taskFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  filterTasks();
+}
+
+function filterTasks() {
+  const q = document.getElementById('task-search')?.value.toLowerCase() || '';
+  let tasks = allTasks;
+  if (taskFilter === 'completed') tasks = tasks.filter(t => t.status === 'completed');
+  else if (taskFilter === 'failed') tasks = tasks.filter(t => t.status === 'failed');
+  else if (taskFilter === 'running') tasks = tasks.filter(t => !['completed','failed'].includes(t.status));
+  if (q) tasks = tasks.filter(t => (t.issue_title||'').toLowerCase().includes(q) || extractRepo(t.github_issue_url).toLowerCase().includes(q));
+  renderAllTasks(tasks);
+}
+
+function renderAllTasks(tasks) {
+  const tbody = document.getElementById('all-task-body');
+  if (!tasks.length) { tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No tasks match this filter.</td></tr>'; return; }
+  tbody.innerHTML = tasks.map(t => {
+    const conf = t.confidence != null ? (t.confidence * 100).toFixed(0) : null;
+    const rev = t.review_score != null ? (t.review_score * 100).toFixed(0) : null;
+    const barW = conf ? Math.min(100, conf) : 0;
+    const barCls = conf >= 75 ? 'score-high' : conf >= 50 ? 'score-mid' : 'score-low';
+    return `<tr onclick="loadTaskDash('${t.task_id}')">
+      <td class="td-title">${t.issue_title || t.github_issue_url}</td>
+      <td class="td-repo">${extractRepo(t.github_issue_url)}</td>
+      <td><span class="badge badge-${t.status}">${t.status}</span></td>
+      <td>
+        ${conf != null ? `<div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;font-weight:500;min-width:32px">${conf}%</span><div class="score-bar-wrap"><div class="score-bar ${barCls}" style="width:${barW}%"></div></div></div>` : '<span style="color:var(--text-3)">—</span>'}
+      </td>
+      <td>${rev != null ? `<span style="font-size:12px;color:${rev>=75?'var(--green)':rev>=50?'var(--yellow)':'var(--red)'}">${rev}%</span>` : '<span style="color:var(--text-3)">—</span>'}</td>
+      <td class="td-mono">${timeAgo(t.created_at)}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadTask(taskId) {
+  try {
+    const r = await apiFetch('/tasks/' + taskId);
+    if (!r) return;
+    const task = await r.json();
+    activePipelineId = taskId;
+    openPipeline(task);
+    if (!['completed','failed'].includes(task.status)) startPolling(taskId);
+  } catch {}
+}
+
+async function loadTaskDash(taskId) {
+  showPage('dashboard');
+  await loadTask(taskId);
+}
+
+async function loadMetrics() {
+  try {
+    const [mr, dr] = await Promise.all([
+      apiFetch('/metrics').then(r => r?.json()),
+      apiFetch('/metrics/daily').then(r => r?.json()),
+    ]);
+    if (!mr || !dr) return;
+
+    const s = mr.summary;
+    document.getElementById('m-total').textContent = s.total_tasks;
+    document.getElementById('mm-total').textContent = s.total_tasks;
+    document.getElementById('m-rate').textContent = s.success_rate_pct + '%';
+    document.getElementById('mm-rate').textContent = s.success_rate_pct + '%';
+    document.getElementById('m-completed-sub').textContent = s.completed + ' completed';
+    document.getElementById('mm-sub').textContent = s.completed + ' of ' + s.total_tasks + ' completed';
+
+    const q = mr.quality;
+    if (q.avg_confidence != null) document.getElementById('m-conf').textContent = (q.avg_confidence*100).toFixed(0) + '%';
+    if (q.reviewer_passed_pct != null) {
+      document.getElementById('m-review').textContent = q.reviewer_passed_pct + '%';
+      document.getElementById('mm-time').textContent = mr.performance?.avg_completion_time_sec?.toFixed(0) || '—';
+      document.getElementById('mm-cost').textContent = '$' + (mr.performance?.total_estimated_cost_usd || 0).toFixed(4);
+    }
+
+    renderDailyChart(dr.data);
+
+    const topReposEl = document.getElementById('top-repos');
+    if (mr.top_repos?.length) {
+      topReposEl.innerHTML = mr.top_repos.map(r =>
+        `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--text)">${r.repo}</span>
+          <span style="font-size:12px;color:var(--text-3)">${r.tasks} task${r.tasks !== 1 ? 's' : ''}</span>
+        </div>`).join('');
+    } else {
+      topReposEl.innerHTML = '<div style="color:var(--text-3);font-size:12px">No data yet.</div>';
+    }
+  } catch {}
+}
+
+function renderDailyChart(data) {
+  const el = document.getElementById('daily-chart');
+  if (!data?.length) { el.innerHTML = '<div style="color:var(--text-3);font-size:12px;margin:auto">No data yet.</div>'; return; }
+  const max = Math.max(...data.map(d => d.total), 1);
+  el.innerHTML = data.map(d => {
+    const h = Math.round((d.total / max) * 100);
+    const label = d.date.slice(5);
+    return `<div class="bar-col">
+      <div class="bar-fill" style="height:${h}%;background:${d.failed > 0 ? 'var(--yellow)' : 'var(--accent)'}"></div>
+      <div class="bar-label">${label}</div>
+    </div>`;
+  }).join('');
+}
+
+async function loadWebhookHealth() {
+  try {
+    const r = await apiFetch('/webhook/github/health');
+    if (!r) return;
+    const data = await r.json();
+    document.getElementById('webhook-health').innerHTML =
+      `<span style="color:var(--green)">● Online</span>
+       <span style="color:var(--text-3);margin-left:12px">Auto-trigger on open: ${data.auto_trigger_on_open ? '✓ Yes' : '✗ No'}</span>`;
+  } catch {
+    document.getElementById('webhook-health').innerHTML = '<span style="color:var(--red)">● Offline — start the server first</span>';
+  }
+}
+
+function extractRepo(url) {
+  const m = url?.match(/github\.com\/([^/]+\/[^/]+)/);
+  return m ? m[1] : url || '';
+}
+
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+
+async function refreshAll() {
+  await Promise.all([loadDashTasks(), loadMetrics(), checkHealth()]);
+}
+
+checkHealth();
+loadDashTasks();
+loadMetrics();
+setInterval(loadDashTasks, 10000);
+setInterval(checkHealth, 15000);
+</script>
+</body>
+</html>

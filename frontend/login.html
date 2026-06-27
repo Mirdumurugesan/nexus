@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NEXUS — Sign in</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #0a0a0f;
+  color: #f0f0f5;
+  font-size: 14px;
+}
+body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+
+.bg-grid {
+  position: fixed; inset: 0; z-index: 0;
+  background-image:
+    linear-gradient(rgba(107,110,249,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(107,110,249,0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.card {
+  position: relative; z-index: 1;
+  background: #111118;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  padding: 40px 44px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+}
+
+.logo { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
+.logo-icon {
+  width: 38px; height: 38px;
+  background: linear-gradient(135deg, #6b6ef9, #a78bfa);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 17px; color: #fff; letter-spacing: -0.5px;
+}
+.logo-text { font-size: 20px; font-weight: 600; letter-spacing: 0.3px; }
+.logo-sub { font-size: 11px; color: #5a5a70; letter-spacing: 0.8px; text-transform: uppercase; margin-top: 1px; }
+
+.tab-row { display: flex; gap: 4px; background: #16161f; border-radius: 8px; padding: 4px; margin-bottom: 28px; }
+.tab {
+  flex: 1; padding: 7px; text-align: center; font-size: 13px; font-weight: 500;
+  border-radius: 6px; cursor: pointer; color: #5a5a70;
+  border: none; background: none; font-family: 'Inter', sans-serif;
+  transition: all 0.15s;
+}
+.tab.active { background: #1c1c28; color: #f0f0f5; }
+
+.form-group { margin-bottom: 16px; }
+label { display: block; font-size: 12px; font-weight: 500; color: #9898b0; margin-bottom: 6px; letter-spacing: 0.3px; }
+input {
+  width: 100%; padding: 10px 14px;
+  background: #16161f; border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px; color: #f0f0f5; font-size: 13px;
+  font-family: 'Inter', sans-serif;
+  outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+}
+input::placeholder { color: #3a3a50; }
+input:focus { border-color: #6b6ef9; box-shadow: 0 0 0 3px rgba(107,110,249,0.15); }
+input.err { border-color: #ef4444; }
+
+.btn-submit {
+  width: 100%; padding: 11px;
+  background: #6b6ef9; color: #fff;
+  border: none; border-radius: 8px;
+  font-size: 14px; font-weight: 600;
+  cursor: pointer; font-family: 'Inter', sans-serif;
+  transition: background 0.15s, transform 0.1s;
+  margin-top: 8px;
+  letter-spacing: 0.2px;
+}
+.btn-submit:hover { background: #7c7ffa; }
+.btn-submit:active { transform: scale(0.98); }
+.btn-submit:disabled { background: #2a2a3a; color: #5a5a70; cursor: not-allowed; transform: none; }
+
+.divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
+.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,0.07); }
+.divider span { font-size: 11px; color: #3a3a50; }
+
+.err-box {
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 8px; padding: 10px 14px;
+  font-size: 12px; color: #fca5a5;
+  margin-bottom: 16px; display: none;
+}
+.err-box.show { display: block; }
+
+.info-box {
+  background: rgba(107,110,249,0.08);
+  border: 1px solid rgba(107,110,249,0.2);
+  border-radius: 8px; padding: 10px 14px;
+  font-size: 12px; color: #a5a8fc;
+  margin-bottom: 16px; display: none;
+}
+.info-box.show { display: block; }
+
+.strength-bar { height: 3px; border-radius: 99px; background: #1c1c28; margin-top: 6px; overflow: hidden; }
+.strength-fill { height: 100%; border-radius: 99px; transition: width 0.3s, background 0.3s; width: 0; }
+
+.footer-note { margin-top: 24px; text-align: center; font-size: 11px; color: #3a3a50; }
+.footer-note a { color: #6b6ef9; text-decoration: none; }
+
+.loading-spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: #fff; border-radius: 50%;
+  animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.role-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 99px;
+  background: rgba(34,197,94,0.1); color: #22c55e;
+  border: 1px solid rgba(34,197,94,0.2);
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+}
+</style>
+</head>
+<body>
+<div class="bg-grid"></div>
+
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">NX</div>
+    <div>
+      <div class="logo-text">NEXUS</div>
+      <div class="logo-sub">Autonomous SWE Platform</div>
+    </div>
+  </div>
+
+  <div class="tab-row">
+    <button class="tab active" id="tab-login" onclick="switchTab('login')">Sign in</button>
+    <button class="tab" id="tab-register" onclick="switchTab('register')">Create account</button>
+  </div>
+
+  <div class="err-box" id="err-box"></div>
+  <div class="info-box" id="info-box"></div>
+
+  <!-- ── Login form ── -->
+  <div id="login-form">
+    <div class="form-group">
+      <label>Username or email</label>
+      <input type="text" id="l-username" placeholder="your-username" autocomplete="username" />
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="l-password" placeholder="••••••••" autocomplete="current-password"
+             onkeydown="if(event.key==='Enter') doLogin()" />
+    </div>
+    <button class="btn-submit" id="login-btn" onclick="doLogin()">Sign in</button>
+  </div>
+
+  <!-- ── Register form ── -->
+  <div id="register-form" style="display:none">
+    <div class="form-group">
+      <label>Full name</label>
+      <input type="text" id="r-name" placeholder="Mirdula M" autocomplete="name" />
+    </div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="r-email" placeholder="you@example.com" autocomplete="email" />
+    </div>
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="r-username" placeholder="mirdula" autocomplete="username" />
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="r-password" placeholder="Min 8 characters"
+             oninput="checkStrength(this.value)"
+             onkeydown="if(event.key==='Enter') doRegister()" />
+      <div class="strength-bar"><div class="strength-fill" id="strength-fill"></div></div>
+    </div>
+    <button class="btn-submit" id="register-btn" onclick="doRegister()">Create account</button>
+    <div class="footer-note" style="margin-top:12px">The first account created gets <span class="role-badge">admin</span> role.</div>
+  </div>
+
+  <div class="footer-note">NEXUS v0.2 &mdash; <a href="http://127.0.0.1:8000/docs" target="_blank">API docs</a></div>
+</div>
+
+<script>
+const API = 'http://127.0.0.1:8000/api/v1';
+
+function switchTab(tab) {
+  document.getElementById('login-form').style.display = tab === 'login' ? 'block' : 'none';
+  document.getElementById('register-form').style.display = tab === 'register' ? 'block' : 'none';
+  document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+  document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+  clearMessages();
+}
+
+function showErr(msg) {
+  const el = document.getElementById('err-box');
+  el.textContent = msg; el.classList.add('show');
+  document.getElementById('info-box').classList.remove('show');
+}
+function showInfo(msg) {
+  const el = document.getElementById('info-box');
+  el.textContent = msg; el.classList.add('show');
+  document.getElementById('err-box').classList.remove('show');
+}
+function clearMessages() {
+  document.getElementById('err-box').classList.remove('show');
+  document.getElementById('info-box').classList.remove('show');
+}
+
+function checkStrength(pw) {
+  const fill = document.getElementById('strength-fill');
+  let score = 0;
+  if (pw.length >= 8) score++;
+  if (/[A-Z]/.test(pw)) score++;
+  if (/[0-9]/.test(pw)) score++;
+  if (/[^A-Za-z0-9]/.test(pw)) score++;
+  const pct = score * 25;
+  const colors = ['', '#ef4444', '#eab308', '#22c55e', '#6b6ef9'];
+  fill.style.width = pct + '%';
+  fill.style.background = colors[score] || '#ef4444';
+}
+
+async function doLogin() {
+  clearMessages();
+  const username = document.getElementById('l-username').value.trim();
+  const password = document.getElementById('l-password').value;
+  if (!username || !password) { showErr('Enter your username and password.'); return; }
+
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span>Signing in...';
+
+  try {
+    const r = await fetch(API + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'Login failed');
+
+    localStorage.setItem('nexus_token', data.access_token);
+    localStorage.setItem('nexus_user', JSON.stringify({
+      username: data.username,
+      full_name: data.full_name,
+      role: data.role,
+      user_id: data.user_id,
+    }));
+
+    showInfo('Welcome back, ' + data.full_name + '! Redirecting...');
+    setTimeout(() => window.location.href = 'index.html', 800);
+  } catch (e) {
+    showErr(e.message);
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+}
+
+async function doRegister() {
+  clearMessages();
+  const full_name = document.getElementById('r-name').value.trim();
+  const email = document.getElementById('r-email').value.trim();
+  const username = document.getElementById('r-username').value.trim();
+  const password = document.getElementById('r-password').value;
+
+  if (!email || !username || !password) { showErr('All fields are required.'); return; }
+  if (password.length < 8) { showErr('Password must be at least 8 characters.'); return; }
+
+  const btn = document.getElementById('register-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span>Creating account...';
+
+  try {
+    const r = await fetch(API + '/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name, email, username, password }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'Registration failed');
+
+    localStorage.setItem('nexus_token', data.access_token);
+    localStorage.setItem('nexus_user', JSON.stringify({
+      username: data.username,
+      full_name: data.full_name,
+      role: data.role,
+      user_id: data.user_id,
+    }));
+
+    showInfo('Account created! Role: ' + data.role + '. Redirecting...');
+    setTimeout(() => window.location.href = 'index.html', 800);
+  } catch (e) {
+    showErr(e.message);
+    btn.disabled = false;
+    btn.textContent = 'Create account';
+  }
+}
+
+// If already logged in, redirect
+if (localStorage.getItem('nexus_token')) {
+  window.location.href = 'index.html';
+}
+</script>
+</body>
+</html>
