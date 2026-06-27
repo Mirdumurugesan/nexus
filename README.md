@@ -231,5 +231,3 @@ nexus/
 **Why tree-sitter?** Preserves semantic boundaries — functions never get split mid-body. The LLM always sees complete, meaningful code units.
 
 ---
-
-*Built by Mirdula M — M.Tech CSE, SREC (2027)*
