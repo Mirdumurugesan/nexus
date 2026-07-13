@@ -1,15 +1,19 @@
 """
 Engineer Agent — generates the actual code patch using retrieved context.
 Runs after the Planner has created a plan and RAG has retrieved context.
+Primary model (OpenAI) with a Groq fallback for provider resilience.
 """
+import logging
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from app.core.config import get_settings
+from app.core.llm import unpack_structured
 from app.agents.state import NexusState
 from app.rag.retriever import hybrid_retrieve, format_context_for_llm
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 ENGINEER_SYSTEM = """You are an expert software engineer fixing a GitHub issue.
@@ -32,17 +36,22 @@ class EngineerOutput(BaseModel):
     test_hint: str = Field(description="What to test to verify the fix works")
 
 
+def _fallback_model_name() -> str:
+    """Parse 'groq/<model-id>' from settings (model ids may themselves contain '/')."""
+    return settings.fallback_llm.split("/", 1)[-1]
+
+
 def run_engineer(state: NexusState) -> NexusState:
     """LangGraph node: generate the patch using RAG context + plan."""
-    print(f"[engineer] Generating patch for: {state['issue_title']}")
+    logger.info("[engineer] Generating patch for: %s", state["issue_title"])
 
-    # RAG retrieval
+    # RAG retrieval (honors the API's use_hyde flag)
     retrieved = hybrid_retrieve(
         issue_title=state["issue_title"],
         issue_body=state["issue_body"],
         repo_name=state["repo_name"],
         top_k=12,
-        use_hyde=True,
+        use_hyde=state.get("use_hyde", True),
     )
     context = format_context_for_llm(retrieved, max_tokens=6000)
 
@@ -64,29 +73,32 @@ Body: {state['issue_body'][:1200]}
 
 Generate the unified diff patch:"""
 
+    messages = [
+        SystemMessage(content=ENGINEER_SYSTEM),
+        HumanMessage(content=user_message),
+    ]
+
     try:
         llm = ChatOpenAI(
-            model="gpt-4o",
+            model=settings.primary_llm,
             api_key=settings.openai_api_key,
             temperature=0.1,
-        ).with_structured_output(EngineerOutput)
-        result = llm.invoke([
-            SystemMessage(content=ENGINEER_SYSTEM),
-            HumanMessage(content=user_message),
-        ])
+            max_retries=2,
+        ).with_structured_output(EngineerOutput, include_raw=True)
+        raw_result = llm.invoke(messages)
     except Exception as e:
-        print(f"[engineer] GPT-4o failed: {e}. Falling back to Groq.")
+        logger.warning("[engineer] %s failed: %s. Falling back to Groq.", settings.primary_llm, e)
         llm = ChatGroq(
-            model="llama-3.1-70b-versatile",
+            model=_fallback_model_name(),
             api_key=settings.groq_api_key,
             temperature=0.1,
-        ).with_structured_output(EngineerOutput)
-        result = llm.invoke([
-            SystemMessage(content=ENGINEER_SYSTEM),
-            HumanMessage(content=user_message),
-        ])
+            max_retries=2,
+        ).with_structured_output(EngineerOutput, include_raw=True)
+        raw_result = llm.invoke(messages)
 
-    print(f"[engineer] Patch generated. Confidence: {result.confidence:.2f}")
+    result, in_tok, out_tok = unpack_structured(raw_result)
+
+    logger.info("[engineer] Patch generated. Confidence: %.2f", result.confidence)
     return {
         **state,
         "retrieved_context": context,
@@ -95,5 +107,7 @@ Generate the unified diff patch:"""
         "files_modified": result.files_modified,
         "confidence": result.confidence,
         "root_cause": result.root_cause,
+        "prompt_tokens": state.get("prompt_tokens", 0) + in_tok,
+        "completion_tokens": state.get("completion_tokens", 0) + out_tok,
         "status": "reviewing",
     }

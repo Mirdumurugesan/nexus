@@ -1,14 +1,34 @@
 """
 Integration tests for the NEXUS FastAPI endpoints.
 Uses TestClient (no real DB/LLM calls — mocked).
+Auth is overridden in conftest.py (fake engineer user).
 """
+import hmac
 import json
+import hashlib
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
+
+WEBHOOK_TEST_SECRET = "test-webhook-secret"
+
+
+def _signed_webhook_post(payload: dict, event: str):
+    """POST a webhook payload with a valid HMAC-SHA256 signature."""
+    body = json.dumps(payload).encode()
+    sig = "sha256=" + hmac.new(WEBHOOK_TEST_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return client.post(
+        "/api/v1/webhook/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": event,
+            "X-Hub-Signature-256": sig,
+        },
+    )
 
 
 class TestHealthEndpoint:
@@ -53,7 +73,13 @@ class TestCreateTask:
 
     def test_empty_url_returns_422(self):
         r = client.post("/api/v1/tasks", json={"github_issue_url": ""})
-        assert r.status_code in (422, 400, 500)
+        assert r.status_code == 422
+
+    def test_non_issue_url_returns_422(self):
+        r = client.post("/api/v1/tasks", json={
+            "github_issue_url": "https://github.com/psf/requests/pull/123",
+        })
+        assert r.status_code == 422
 
 
 class TestGetTask:
@@ -109,20 +135,39 @@ class TestMetricsEndpoint:
 
 
 class TestWebhookEndpoint:
+    @pytest.fixture(autouse=True)
+    def _webhook_secret(self, monkeypatch):
+        """Configure a webhook secret and keep webhook DB writes on the test DB."""
+        from app.api import webhook
+        from conftest import TestingSessionLocal
+        monkeypatch.setattr(webhook.settings, "github_webhook_secret", WEBHOOK_TEST_SECRET)
+        monkeypatch.setattr(webhook, "SessionLocal", TestingSessionLocal)
+
     def test_webhook_health(self):
         r = client.get("/api/v1/webhook/github/health")
         assert r.status_code == 200
 
-    def test_non_issue_event_ignored(self):
+    def test_disabled_without_secret(self, monkeypatch):
+        from app.api import webhook
+        monkeypatch.setattr(webhook.settings, "github_webhook_secret", "")
+        r = client.post("/api/v1/webhook/github", json={"action": "labeled"})
+        assert r.status_code == 503
+
+    def test_unsigned_request_rejected(self):
         r = client.post(
             "/api/v1/webhook/github",
-            json={"action": "created"},
-            headers={"X-GitHub-Event": "push"},
+            json={"action": "labeled"},
+            headers={"X-GitHub-Event": "issues"},
         )
+        assert r.status_code == 401
+
+    def test_non_issue_event_ignored(self):
+        r = _signed_webhook_post({"action": "created"}, event="push")
         assert r.status_code == 200
         assert r.json()["status"] == "ignored"
 
-    def test_issue_opened_triggers_pipeline(self):
+    def test_issue_opened_is_ignored(self):
+        """Auto-trigger on 'opened' was removed (cost control) — must be ignored."""
         payload = {
             "action": "opened",
             "issue": {
@@ -131,15 +176,25 @@ class TestWebhookEndpoint:
                 "html_url": "https://github.com/psf/requests/issues/999",
                 "body": "Test body",
             },
-            "repository": {
-                "full_name": "psf/requests",
+            "repository": {"full_name": "psf/requests"},
+        }
+        r = _signed_webhook_post(payload, event="issues")
+        assert r.status_code == 200
+        assert r.json()["status"] == "ignored"
+
+    def test_trigger_label_triggers_pipeline(self):
+        payload = {
+            "action": "labeled",
+            "label": {"name": "nexus"},
+            "issue": {
+                "number": 999,
+                "title": "Test issue",
+                "html_url": "https://github.com/psf/requests/issues/999",
+                "body": "Test body",
             },
+            "repository": {"full_name": "psf/requests"},
         }
         with patch("app.api.webhook.run_pipeline"):
-            r = client.post(
-                "/api/v1/webhook/github",
-                json=payload,
-                headers={"X-GitHub-Event": "issues"},
-            )
+            r = _signed_webhook_post(payload, event="issues")
         assert r.status_code == 200
         assert r.json()["status"] == "triggered"

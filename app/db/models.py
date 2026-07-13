@@ -20,6 +20,9 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Creator of the task. Nullable: webhook-created tasks have no owner,
+    # and pre-existing rows keep NULL (backward compatible).
+    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     github_issue_url = Column(String(500), nullable=False)
     repo_url = Column(String(500), nullable=True)
     repo_name = Column(String(200), nullable=True)
@@ -39,8 +42,4 @@ class Task(Base):
     estimated_cost_usd = Column(Float, default=0.0)
 
     error_message = Column(Text, nullable=True)
-    meta_json = Column(Text, nullable=True)   # stores plan, review scores, reflection count
-
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    completed_at = Column(DateTime, nullable=True)
+    meta_json = Column(Text, nullable=True)   # stores plan, review scores, reflection

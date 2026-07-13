@@ -6,6 +6,16 @@ from unittest.mock import patch, MagicMock
 from app.agents.state import NexusState
 
 
+def structured_result(mock_output, in_tokens: int = 100, out_tokens: int = 50) -> dict:
+    """
+    Agents call .with_structured_output(..., include_raw=True), which returns
+    {"raw": AIMessage, "parsed": <model>, "parsing_error": None}.
+    """
+    raw = MagicMock()
+    raw.usage_metadata = {"input_tokens": in_tokens, "output_tokens": out_tokens}
+    return {"raw": raw, "parsed": mock_output, "parsing_error": None}
+
+
 def make_state(**overrides) -> NexusState:
     base: NexusState = {
         "task_id": "test-123",
@@ -13,6 +23,7 @@ def make_state(**overrides) -> NexusState:
         "issue_body": "When HTTPS_PROXY is set, HTTP requests also use it incorrectly.",
         "repo_name": "psf/requests",
         "repo_url": "https://github.com/psf/requests.git",
+        "use_hyde": True,
         "plan": [],
         "plan_reasoning": "",
         "retrieved_context": "def send(self, request, **kwargs):\n    pass",
@@ -24,6 +35,9 @@ def make_state(**overrides) -> NexusState:
         "review_score": 0.0,
         "review_feedback": "",
         "review_passed": False,
+        "review_issues_found": [],
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
         "reflection_count": 0,
         "error": "",
         "status": "planning",
@@ -44,7 +58,7 @@ class TestPlannerAgent:
         ]
 
         with patch("app.agents.planner.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = mock_output
+            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
             state = make_state()
             result = run_planner(state)
 
@@ -62,7 +76,7 @@ class TestPlannerAgent:
         ]
 
         with patch("app.agents.planner.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = mock_output
+            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
             result = run_planner(make_state())
 
         plan_item = result["plan"][0]
@@ -83,7 +97,7 @@ class TestReviewerAgent:
         mock_output.issues_found = []
 
         with patch("app.agents.reviewer.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = mock_output
+            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
             state = make_state(patch="--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new")
             result = run_reviewer(state)
 
@@ -101,7 +115,7 @@ class TestReviewerAgent:
         mock_output.issues_found = ["Missing edge case"]
 
         with patch("app.agents.reviewer.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = mock_output
+            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
             result = run_reviewer(make_state(patch="minimal patch"))
 
         assert result["review_passed"] is False
@@ -118,7 +132,7 @@ class TestReflectorAgent:
         mock_output.new_confidence = 0.82
 
         with patch("app.agents.reflector.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = mock_output
+            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
             state = make_state(
                 patch="old patch",
                 review_score=0.4,
@@ -158,3 +172,32 @@ class TestGraphConditionalEdge:
         from app.agents.reflector import MAX_REFLECTIONS
         state = make_state(review_passed=False, reflection_count=MAX_REFLECTIONS)
         assert should_reflect(state) == "done"
+
+    def test_budget_kill_switch_stops_loop(self):
+        """Token budget exhaustion must terminate the loop even mid-reflection."""
+        from app.agents.graph import should_reflect
+        state = make_state(
+            review_passed=False,
+            reflection_count=0,
+            prompt_tokens=10_000_000,
+            completion_tokens=0,
+        )
+        assert should_reflect(state) == "done"
+
+    def test_tokens_accumulate_across_agents(self):
+        from app.agents.reviewer import run_reviewer
+
+        mock_output = MagicMock()
+        mock_output.score = 0.9
+        mock_output.passed = True
+        mock_output.feedback = ""
+        mock_output.issues_found = []
+
+        with patch("app.agents.reviewer.ChatOpenAI") as MockLLM:
+            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = (
+                structured_result(mock_output, in_tokens=120, out_tokens=30)
+            )
+            result = run_reviewer(make_state(prompt_tokens=1000, completion_tokens=500))
+
+        assert result["prompt_tokens"] == 1120
+        assert result["completion_tokens"] == 530

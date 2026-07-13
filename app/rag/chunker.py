@@ -5,11 +5,13 @@ Each chunk preserves semantic boundaries — a function is never split in half.
 """
 import os
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 import tree_sitter_python as tspython
 from tree_sitter import Language, Parser
 
+logger = logging.getLogger(__name__)
 
 PY_LANGUAGE = Language(tspython.language())
 parser = Parser(PY_LANGUAGE)
@@ -210,7 +212,7 @@ def chunk_repository(repo_path: str) -> list[CodeChunk]:
                 all_chunks.extend(chunks)
 
             except Exception as e:
-                print(f"[chunker] Skipping {file_path}: {e}")
+                logger.warning("[chunker] Skipping %s: %s", file_path, e)
                 continue
 
     return all_chunks

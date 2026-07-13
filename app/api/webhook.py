@@ -1,25 +1,31 @@
 """
 GitHub App Webhook Handler
 ──────────────────────────
-Receives GitHub webhook events and auto-triggers NEXUS when:
-- A new issue is opened (action: "opened")
-- An issue is labeled with "nexus" or "auto-fix"
+Receives GitHub webhook events and auto-triggers NEXUS when an issue is
+labeled with one of the trigger labels ("nexus", "auto-fix", ...).
+
+SECURITY: the endpoint is DISABLED (503) unless GITHUB_WEBHOOK_SECRET is set,
+and every request must carry a valid HMAC-SHA256 signature. Auto-triggering
+on every opened issue was removed deliberately — each run costs real LLM
+money, so triggering requires an explicit label from a repo collaborator.
 
 Setup:
 1. Go to GitHub → Settings → Developer settings → GitHub Apps → New
 2. Set webhook URL to: https://your-domain.com/api/v1/webhook/github
 3. Subscribe to "Issues" events
-4. Add GITHUB_WEBHOOK_SECRET to your .env
+4. Set a webhook secret and add GITHUB_WEBHOOK_SECRET to your .env
 """
 import hashlib
 import hmac
 import json
+import logging
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
 from app.core.config import get_settings
 from app.api.tasks import run_pipeline
 from app.db.database import SessionLocal
 from app.db.models import Task, TaskStatus
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/webhook", tags=["webhook"])
 settings = get_settings()
 
@@ -43,17 +49,22 @@ def verify_github_signature(payload: bytes, signature: str, secret: str) -> bool
 async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Receive GitHub webhook events.
-    Triggers NEXUS pipeline when an issue is opened or labeled.
+    Triggers the NEXUS pipeline when a trigger label is added to an issue.
     """
+    # Signature verification is mandatory — no secret, no webhook.
+    webhook_secret = settings.github_webhook_secret
+    if not webhook_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook disabled: GITHUB_WEBHOOK_SECRET is not configured",
+        )
+
     payload_bytes = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
     event_type = request.headers.get("X-GitHub-Event", "")
 
-    # Verify signature if secret is configured
-    webhook_secret = getattr(settings, "github_webhook_secret", "")
-    if webhook_secret:
-        if not verify_github_signature(payload_bytes, signature, webhook_secret):
-            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    if not verify_github_signature(payload_bytes, signature, webhook_secret):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     # Only handle issue events
     if event_type != "issues":
@@ -73,15 +84,11 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     issue_title = issue.get("title", "")
     repo_full_name = repo.get("full_name", "")
 
-    # Trigger on: new issue opened, OR label "nexus"/"auto-fix" added
+    # Trigger ONLY when a trigger label is added (explicit, cost-bounded opt-in)
     should_trigger = False
     trigger_reason = ""
 
-    if action == "opened":
-        should_trigger = True
-        trigger_reason = "issue opened"
-
-    elif action == "labeled":
+    if action == "labeled":
         label_name = payload.get("label", {}).get("name", "").lower()
         if label_name in TRIGGER_LABELS:
             should_trigger = True
@@ -90,7 +97,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     if not should_trigger or not issue_url:
         return {"status": "ignored", "action": action}
 
-    # Create task in DB
+    # Create task in DB (no owner — webhook tasks are system-initiated)
     db = SessionLocal()
     try:
         task = Task(
@@ -111,8 +118,10 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     # Trigger pipeline in background
     background_tasks.add_task(run_pipeline, task_id=task_id, use_hyde=True)
 
-    print(f"[webhook] Auto-triggered NEXUS for {repo_full_name}#{issue_number} ({trigger_reason})")
-    print(f"[webhook] Task ID: {task_id}")
+    logger.info(
+        "[webhook] Auto-triggered NEXUS for %s#%s (%s) → task %s",
+        repo_full_name, issue_number, trigger_reason, task_id,
+    )
 
     return {
         "status": "triggered",
@@ -126,6 +135,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 async def webhook_health():
     return {
         "status": "ok",
-        "trigger_labels": list(TRIGGER_LABELS),
-        "auto_trigger_on_open": True,
+        "configured": bool(settings.github_webhook_secret),
+        "trigger_labels": sorted(TRIGGER_LABELS),
+        "auto_trigger_on_open": False,
     }

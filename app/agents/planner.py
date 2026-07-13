@@ -1,14 +1,17 @@
 """
 Planner Agent — decomposes a GitHub issue into ordered subtasks.
-Uses GPT-4o with structured output to produce a deterministic plan.
+Uses the configured primary LLM with structured output to produce a deterministic plan.
 """
 import uuid
+import logging
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.core.config import get_settings
+from app.core.llm import unpack_structured
 from app.agents.state import NexusState, SubTask
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 PLANNER_SYSTEM = """You are a senior software engineering planner.
@@ -29,15 +32,16 @@ class PlannerOutput(BaseModel):
 
 def run_planner(state: NexusState) -> NexusState:
     """LangGraph node: plan the fix for the issue."""
-    print(f"[planner] Planning fix for: {state['issue_title']}")
+    logger.info("[planner] Planning fix for: %s", state["issue_title"])
 
     llm = ChatOpenAI(
-        model="gpt-4o",
+        model=settings.primary_llm,
         api_key=settings.openai_api_key,
         temperature=0.2,
-    ).with_structured_output(PlannerOutput)
+        max_retries=2,
+    ).with_structured_output(PlannerOutput, include_raw=True)
 
-    result = llm.invoke([
+    raw_result = llm.invoke([
         SystemMessage(content=PLANNER_SYSTEM),
         HumanMessage(content=f"""
 Issue Title: {state['issue_title']}
@@ -46,6 +50,7 @@ Repository: {state['repo_name']}
 
 Plan the fix:"""),
     ])
+    result, in_tok, out_tok = unpack_structured(raw_result)
 
     subtasks: list[SubTask] = [
         SubTask(
@@ -57,10 +62,12 @@ Plan the fix:"""),
         for st in result.subtasks
     ]
 
-    print(f"[planner] Created {len(subtasks)} subtasks")
+    logger.info("[planner] Created %d subtasks", len(subtasks))
     return {
         **state,
         "plan": subtasks,
         "plan_reasoning": result.reasoning,
+        "prompt_tokens": state.get("prompt_tokens", 0) + in_tok,
+        "completion_tokens": state.get("completion_tokens", 0) + out_tok,
         "status": "engineering",
     }

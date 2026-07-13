@@ -3,12 +3,15 @@ Reflector Agent — Phase 4: self-improvement loop.
 If the reviewer rejects the patch, the reflector analyzes the feedback
 and generates an improved patch. Max 2 reflection rounds.
 """
+import logging
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from app.core.config import get_settings
+from app.core.llm import unpack_structured
 from app.agents.state import NexusState
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 MAX_REFLECTIONS = 2
@@ -33,11 +36,11 @@ class ReflectorOutput(BaseModel):
 def run_reflector(state: NexusState) -> NexusState:
     """LangGraph node: improve the patch based on reviewer feedback."""
     reflection_count = state.get("reflection_count", 0) + 1
-    print(f"[reflector] Reflection round {reflection_count}/{MAX_REFLECTIONS}")
+    logger.info("[reflector] Reflection round %d/%d", reflection_count, MAX_REFLECTIONS)
 
     if reflection_count > MAX_REFLECTIONS:
         # Give up after max reflections — use best patch we have
-        print("[reflector] Max reflections reached. Using current patch.")
+        logger.info("[reflector] Max reflections reached. Using current patch.")
         return {
             **state,
             "reflection_count": reflection_count,
@@ -45,12 +48,13 @@ def run_reflector(state: NexusState) -> NexusState:
         }
 
     llm = ChatOpenAI(
-        model="gpt-4o",
+        model=settings.primary_llm,
         api_key=settings.openai_api_key,
         temperature=0.2,
-    ).with_structured_output(ReflectorOutput)
+        max_retries=2,
+    ).with_structured_output(ReflectorOutput, include_raw=True)
 
-    result = llm.invoke([
+    raw_result = llm.invoke([
         SystemMessage(content=REFLECTOR_SYSTEM),
         HumanMessage(content=f"""
 ## GitHub Issue
@@ -70,13 +74,16 @@ Issues: {', '.join(state.get('review_issues_found', []))}
 
 Generate an improved patch:"""),
     ])
+    result, in_tok, out_tok = unpack_structured(raw_result)
 
-    print(f"[reflector] Improved patch generated. New confidence: {result.new_confidence:.2f}")
+    logger.info("[reflector] Improved patch generated. New confidence: %.2f", result.new_confidence)
     return {
         **state,
         "patch": result.improved_patch,
         "patch_explanation": state.get("patch_explanation", "") + f"\n[Reflection {reflection_count}]: {result.changes_made}",
         "confidence": result.new_confidence,
         "reflection_count": reflection_count,
+        "prompt_tokens": state.get("prompt_tokens", 0) + in_tok,
+        "completion_tokens": state.get("completion_tokens", 0) + out_tok,
         "status": "reviewing",  # go back to reviewer
     }

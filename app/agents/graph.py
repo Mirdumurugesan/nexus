@@ -7,22 +7,35 @@ Flow:
 
 This is the core of NEXUS Phase 2-4.
 """
+import logging
 from langgraph.graph import StateGraph, END
+from app.core.config import get_settings
 from app.agents.state import NexusState
 from app.agents.planner import run_planner
 from app.agents.engineer import run_engineer
 from app.agents.reviewer import run_reviewer
 from app.agents.reflector import run_reflector, MAX_REFLECTIONS
 
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
 
 def should_reflect(state: NexusState) -> str:
     """
     Conditional edge: after reviewing, decide if we're done or need reflection.
+    Terminates on: review pass, reflection cap, or token budget exhaustion.
     """
     if state.get("review_passed", False):
         return "done"
     if state.get("reflection_count", 0) >= MAX_REFLECTIONS:
         return "done"  # exhausted reflections, accept best result
+    total_tokens = state.get("prompt_tokens", 0) + state.get("completion_tokens", 0)
+    if total_tokens >= settings.max_tokens_per_task:
+        logger.warning(
+            "[graph] Token budget exhausted (%d >= %d). Stopping with best patch.",
+            total_tokens, settings.max_tokens_per_task,
+        )
+        return "done"  # budget kill-switch: keep best result, stop spending
     return "reflect"
 
 
@@ -72,6 +85,7 @@ async def run_nexus_pipeline(
     issue_body: str,
     repo_name: str,
     repo_url: str,
+    use_hyde: bool = True,
 ) -> NexusState:
     """
     Run the full NEXUS multi-agent pipeline.
@@ -83,6 +97,7 @@ async def run_nexus_pipeline(
         "issue_body": issue_body,
         "repo_name": repo_name,
         "repo_url": repo_url,
+        "use_hyde": use_hyde,
         "plan": [],
         "plan_reasoning": "",
         "retrieved_context": "",
@@ -94,6 +109,9 @@ async def run_nexus_pipeline(
         "review_score": 0.0,
         "review_feedback": "",
         "review_passed": False,
+        "review_issues_found": [],
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
         "reflection_count": 0,
         "error": "",
         "status": "planning",

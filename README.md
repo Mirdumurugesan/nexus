@@ -54,7 +54,7 @@ GitHub Issue URL
 |-------|-----------|---------|
 | **API** | FastAPI + Uvicorn | Async REST API, webhook receiver |
 | **Agents** | LangGraph 0.2 | Multi-agent state machine orchestration |
-| **LLM** | GPT-4o + Groq LLaMA 3.1 | Patch generation with fallback |
+| **LLM** | GPT-4o + Groq GPT-OSS-120B | Patch generation with fallback |
 | **RAG** | Weaviate Cloud | Hybrid BM25 + vector search |
 | **Embeddings** | OpenAI text-embedding-3-small | Code chunk embeddings |
 | **Chunking** | tree-sitter | AST-based Python code chunking |
@@ -71,7 +71,7 @@ Uses GPT-4o structured output (Pydantic schema enforcement).
 
 ### 2. Engineer Agent
 Generates the actual code patch using retrieved context from Hybrid RAG.
-GPT-4o primary, Groq LLaMA 3.1 fallback.
+GPT-4o primary, Groq GPT-OSS-120B fallback.
 
 ### 3. Reviewer Agent
 Scores the patch on correctness, completeness, safety, and style (0.0–1.0).
@@ -102,6 +102,7 @@ embedding space.
 ### Prerequisites
 - Python 3.11+, OpenAI API key, Groq API key, GitHub Token
 - Supabase account (free), Weaviate Cloud account (free)
+- Or run Postgres + Weaviate locally: `docker compose up -d`
 
 ### Installation
 
@@ -122,9 +123,13 @@ OPENAI_API_KEY=sk-...
 GROQ_API_KEY=gsk_...
 GITHUB_TOKEN=ghp_...
 DATABASE_URL=postgresql://...
-WEAVIATE_URL=https://....weaviate.cloud
-WEAVIATE_API_KEY=...
+WEAVIATE_URL=https://....weaviate.cloud   # or http://localhost:8080 for local
+WEAVIATE_API_KEY=...                      # empty for local Weaviate
+SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
 ```
+
+See `.env.example` for the full list (CORS origins, token budget, model choices).
+With `APP_ENV=production`, startup fails unless `SECRET_KEY` is set.
 
 ### Run
 
@@ -132,15 +137,27 @@ WEAVIATE_API_KEY=...
 uvicorn app.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` or open `frontend/index.html` in your browser.
+Open `http://127.0.0.1:8000/` — the dashboard is served by the app
+(create an account at `/login.html`; the first account gets the admin role).
+API docs: `http://127.0.0.1:8000/docs`.
 
 ### Submit a Task
 
+All task endpoints require a JWT (engineer role):
+
 ```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "you", "password": "..."}' | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+
 curl -X POST http://127.0.0.1:8000/api/v1/tasks \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"github_issue_url": "https://github.com/psf/requests/issues/7443"}'
 ```
+
+Every task tracks its token usage and estimated cost, and the agent loop
+stops automatically when `MAX_TOKENS_PER_TASK` is exhausted.
 
 ---
 
@@ -150,8 +167,14 @@ NEXUS auto-triggers on any repository via GitHub webhooks.
 
 1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New**
 2. Set webhook URL: `https://your-domain/api/v1/webhook/github`
-3. Subscribe to **Issues** events
-4. NEXUS triggers automatically when an issue is opened or labeled `nexus`
+3. Set a webhook secret and put it in `GITHUB_WEBHOOK_SECRET` — **required**;
+   the endpoint returns 503 until it is configured, and every request is
+   HMAC-verified
+4. Subscribe to **Issues** events
+5. NEXUS triggers when an issue is labeled `nexus` (or `auto-fix`,
+   `nexus-fix`, `ai-fix`). Triggering on every opened issue is deliberately
+   not supported — each run costs LLM money, so runs require an explicit
+   label from a collaborator.
 
 ---
 
@@ -159,6 +182,7 @@ NEXUS auto-triggers on any repository via GitHub webhooks.
 
 ```powershell
 pip install datasets
+$env:NEXUS_API_TOKEN = "<jwt from /api/v1/auth/login>"
 python evals/swebench_eval.py --limit 10 --output evals/results.json
 ```
 
@@ -206,6 +230,10 @@ nexus/
 │   │   ├── tasks.py     # Task CRUD + pipeline trigger
 │   │   ├── webhook.py   # GitHub App webhook handler
 │   │   └── metrics.py   # Analytics API
+│   ├── auth/            # JWT auth (register/login, roles, throttling)
+│   ├── core/
+│   │   ├── config.py    # Pydantic settings (env-driven)
+│   │   └── llm.py       # Token accounting + cost estimation helpers
 │   ├── db/
 │   │   ├── models.py    # SQLAlchemy Task model
 │   │   └── database.py  # Supabase connection
@@ -213,10 +241,29 @@ nexus/
 ├── evals/
 │   └── swebench_eval.py # SWE-bench evaluation script
 ├── frontend/
-│   └── index.html       # Real-time dashboard
+│   ├── index.html       # Real-time dashboard (served at /)
+│   └── login.html       # Login / register page
 ├── tests/               # Pytest test suite
+├── Dockerfile           # Single-container deploy (Render/Railway/Fly)
+├── docker-compose.yml   # Local Postgres + Weaviate + Redis
 └── requirements.txt
 ```
+
+---
+
+## Deployment Notes
+
+- **Render/Railway**: build from the `Dockerfile` (or `pip install -r
+  requirements.txt` + `uvicorn app.main:app --host 0.0.0.0 --port $PORT`).
+  Set all env vars from `.env.example`; use `APP_ENV=production`.
+- **Model fallback**: the Engineer falls back from `PRIMARY_LLM` (GPT-4o) to
+  `FALLBACK_LLM` on Groq (`openai/gpt-oss-120b` — the previous LLaMA 3.1/3.3
+  versatile models were decommissioned by Groq).
+- **Single worker**: run one uvicorn worker. Background pipelines run
+  in-process; in-flight tasks from a previous process are marked failed at
+  startup ("orphaned by server restart").
+- **Cost control**: per-task token budget (`MAX_TOKENS_PER_TASK`) hard-stops
+  the reflection loop; webhook runs require an explicit trigger label.
 
 ---
 

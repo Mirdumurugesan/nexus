@@ -3,12 +3,14 @@ Embedding + Weaviate indexing pipeline.
 Uses OpenAI text-embedding-3-small for cost efficiency in Phase 1.
 Weaviate stores both the vector and the raw content for BM25 hybrid search.
 """
+import logging
 import weaviate
 import weaviate.classes as wvc
 from openai import OpenAI
 from app.core.config import get_settings
 from app.rag.chunker import CodeChunk
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 openai_client = OpenAI(api_key=settings.openai_api_key)
 
@@ -18,10 +20,24 @@ EMBEDDING_DIM = 1536
 
 
 def get_weaviate_client() -> weaviate.WeaviateClient:
+    """
+    Connect to Weaviate. Supports both deployment modes:
+    - Weaviate Cloud:  https:// URL + API key  → connect_to_weaviate_cloud
+    - Local (docker-compose, anonymous http):  → connect_to_local
+    """
+    from urllib.parse import urlparse
     from weaviate.auth import AuthApiKey
-    return weaviate.connect_to_weaviate_cloud(
-        cluster_url=settings.weaviate_url,
-        auth_credentials=AuthApiKey(settings.weaviate_api_key),
+
+    if settings.weaviate_url.startswith("https://") and settings.weaviate_api_key:
+        return weaviate.connect_to_weaviate_cloud(
+            cluster_url=settings.weaviate_url,
+            auth_credentials=AuthApiKey(settings.weaviate_api_key),
+        )
+
+    parsed = urlparse(settings.weaviate_url)
+    return weaviate.connect_to_local(
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 8080,
     )
 
 
@@ -60,7 +76,7 @@ def create_collection_if_not_exists(client: weaviate.WeaviateClient):
             bm25_k1=1.2,
         ),
     )
-    print(f"[embedder] Created Weaviate collection: {COLLECTION_NAME}")
+    logger.info("[embedder] Created Weaviate collection: %s", COLLECTION_NAME)
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
@@ -108,7 +124,7 @@ def index_chunks(chunks: list[CodeChunk], repo_name: str) -> int:
                     batch_writer.add_object(properties=obj, vector=vector)
 
             total_indexed += len(batch)
-            print(f"[embedder] Indexed {total_indexed}/{len(chunks)} chunks")
+            logger.info("[embedder] Indexed %d/%d chunks", total_indexed, len(chunks))
 
         return total_indexed
 

@@ -2,8 +2,7 @@
 NEXUS Agent State — the shared data structure that flows through LangGraph.
 Every node reads from and writes to this TypedDict.
 """
-from typing import TypedDict, Annotated
-from langgraph.graph.message import add_messages
+from typing import TypedDict
 
 
 class SubTask(TypedDict):
@@ -20,6 +19,7 @@ class NexusState(TypedDict):
     issue_body: str
     repo_name: str
     repo_url: str
+    use_hyde: bool                  # whether retrieval uses HyDE query expansion
 
     # Planning
     plan: list[SubTask]
@@ -39,6 +39,11 @@ class NexusState(TypedDict):
     review_score: float             # 0.0–1.0
     review_feedback: str
     review_passed: bool
+    review_issues_found: list[str]  # specific problems flagged by the Reviewer
+
+    # Token accounting (agent LLM calls; enforced against MAX_TOKENS_PER_TASK)
+    prompt_tokens: int
+    completion_tokens: int
 
     # Control flow
     reflection_count: int           # how many times we've reflected
