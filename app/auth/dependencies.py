@@ -3,6 +3,7 @@ FastAPI dependencies for authentication.
 Use `Depends(get_current_user)` on any protected route.
 Use `Depends(require_admin)` for admin-only routes.
 """
+import uuid
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -38,7 +39,12 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = db.query(User).filter(User.id == user_id).first()
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=401, detail="Invalid token subject")
+
+    user = db.query(User).filter(User.id == user_uuid).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
 

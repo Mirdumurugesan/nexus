@@ -5,7 +5,6 @@ Hybrid RAG retriever:
   3. RRF score fusion      (combines both rankings)
   4. HyDE query expansion  (generate hypothetical code, then search with that)
 """
-import weaviate
 import weaviate.classes as wvc
 from openai import OpenAI
 from dataclasses import dataclass

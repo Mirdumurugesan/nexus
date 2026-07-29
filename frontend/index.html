@@ -1084,7 +1084,14 @@ code {
 </div>
 
 <script>
-const API = 'http://127.0.0.1:8000/api/v1';
+// Same-origin when served by the app; falls back to localhost when the file
+// is opened directly from disk during development.
+const API = (location.protocol === 'file:' ? 'http://127.0.0.1:8000' : location.origin) + '/api/v1';
+// Keep the displayed webhook URL in sync with the actual deployment host
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('webhook-url-text');
+  if (el) el.textContent = API + '/webhook/github';
+});
 let allTasks = [];
 let taskFilter = 'all';
 let pollingId = null;

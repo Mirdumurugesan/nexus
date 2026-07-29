@@ -5,19 +5,29 @@ Runs NEXUS against SWE-bench Lite (300 real GitHub issues with known fixes).
 Reports resolution rate, per-repo breakdown, and cost.
 
 Usage:
+    export NEXUS_API_TOKEN=<jwt from POST /api/v1/auth/login>
     python evals/swebench_eval.py --limit 10 --output results.json
+
+The API requires authentication (engineer role). Get a token via:
+    curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
+         -H "Content-Type: application/json" \
+         -d '{"username": "<user>", "password": "<pass>"}'
 
 SWE-bench Lite dataset: huggingface.co/datasets/princeton-nlp/SWE-bench_Lite
 """
 import argparse
 import json
+import os
+import sys
 import time
 import requests
 from datetime import datetime
 from pathlib import Path
 
 
-API_BASE = "http://127.0.0.1:8000/api/v1"
+API_BASE = os.environ.get("NEXUS_API_BASE", "http://127.0.0.1:8000/api/v1")
+API_TOKEN = os.environ.get("NEXUS_API_TOKEN", "")
+AUTH_HEADERS = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
 POLL_INTERVAL = 5    # seconds between status polls
 MAX_WAIT = 600       # max seconds to wait per task (10 min)
 
@@ -75,6 +85,7 @@ def submit_task(issue_url: str) -> str | None:
         r = requests.post(
             f"{API_BASE}/tasks",
             json={"github_issue_url": issue_url, "use_hyde": True},
+            headers=AUTH_HEADERS,
             timeout=30,
         )
         r.raise_for_status()
@@ -90,7 +101,7 @@ def poll_task(task_id: str) -> dict:
     last_step = ""
     while time.time() - start < MAX_WAIT:
         try:
-            r = requests.get(f"{API_BASE}/tasks/{task_id}", timeout=10)
+            r = requests.get(f"{API_BASE}/tasks/{task_id}", headers=AUTH_HEADERS, timeout=10)
             task = r.json()
             status = task["status"]
             step = task.get("current_step", "")
@@ -149,6 +160,11 @@ def score_patch(nexus_patch: str, ground_truth_patch: str) -> dict:
 
 def run_evaluation(limit: int = 10, output_path: str = "evals/results.json"):
     """Main evaluation loop."""
+    if not API_TOKEN:
+        print("[eval] ERROR: NEXUS_API_TOKEN is not set. The API requires authentication.")
+        print("[eval] Login via POST /api/v1/auth/login and export NEXUS_API_TOKEN=<token>.")
+        sys.exit(1)
+
     print("=" * 60)
     print("  NEXUS × SWE-bench Lite Evaluation")
     print(f"  Instances: {limit} | API: {API_BASE}")

@@ -11,16 +11,20 @@ import json
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
 from app.db.database import get_db
 from app.db.models import Task, TaskStatus
+from app.auth.dependencies import get_current_user
+from app.auth.models import User
 
 router = APIRouter(prefix="/api/v1/metrics", tags=["metrics"])
 
 
 @router.get("")
-async def get_metrics(db: Session = Depends(get_db)):
+async def get_metrics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Overall platform metrics."""
     total = db.query(Task).count()
     completed = db.query(Task).filter(Task.status == TaskStatus.COMPLETED).count()
@@ -106,7 +110,11 @@ async def get_metrics(db: Session = Depends(get_db)):
 
 
 @router.get("/daily")
-async def get_daily_metrics(days: int = 7, db: Session = Depends(get_db)):
+async def get_daily_metrics(
+    days: int = 7,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Task counts by day for the last N days."""
     since = datetime.utcnow() - timedelta(days=days)
     tasks = db.query(Task).filter(Task.created_at >= since).all()

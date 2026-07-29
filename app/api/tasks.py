@@ -41,13 +41,6 @@ class CreateTaskRequest(BaseModel):
     use_hyde: bool = True
 
 
-class PlanStep(BaseModel):
-    id: str
-    description: str
-    file_hint: str
-    status: str
-
-
 class TaskResponse(BaseModel):
     task_id: str
     status: str

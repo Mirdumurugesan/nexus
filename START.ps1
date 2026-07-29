@@ -23,15 +23,14 @@ if (Test-Path ".\venv\Scripts\Activate.ps1") {
     exit 1
 }
 
-# Install/update dependencies
+# Install/update dependencies (pinned — no ad-hoc upgrades)
 Write-Host "[→] Checking dependencies..." -ForegroundColor Yellow
-pip install langgraph==0.2.28 -q
-pip install langchain-core -q --upgrade
+pip install -r requirements.txt -q
 Write-Host "[✓] Dependencies ready" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "[→] Starting NEXUS server..." -ForegroundColor Yellow
-Write-Host "[→] Dashboard: open frontend\index.html in your browser" -ForegroundColor Cyan
+Write-Host "[→] Dashboard: http://127.0.0.1:8000/  (login at /login.html)" -ForegroundColor Cyan
 Write-Host "[→] API Docs: http://127.0.0.1:8000/docs" -ForegroundColor Cyan
 Write-Host "[→] Press Ctrl+C to stop" -ForegroundColor DarkGray
 Write-Host ""

@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from github import Github
+from github import Github, Auth
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -32,7 +32,7 @@ def parse_github_issue_url(url: str) -> tuple[str, str, int]:
 
 def fetch_github_issue(issue_url: str) -> ParsedIssue:
     """Fetch full issue details from GitHub API."""
-    g = Github(settings.github_token)
+    g = Github(auth=Auth.Token(settings.github_token))
 
     owner, repo_name, issue_number = parse_github_issue_url(issue_url)
     repo = g.get_repo(f"{owner}/{repo_name}")
