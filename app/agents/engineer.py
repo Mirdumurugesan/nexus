@@ -51,7 +51,19 @@ def run_engineer(state: NexusState) -> NexusState:
     plan_text = "\n".join(
         f"{i + 1}. [{st['file_hint']}] {st['description']}" for i, st in enumerate(state.get("plan", []))
     )
-    result: EngineerOutput = llm.call(
+    try:
+        result: EngineerOutput = _ask(state, plan_text, context)
+    except llm.LLMUnavailable as e:
+        # No patch this round; the gate records why and the reflector gets a turn.
+        logger.warning("[engineer] LLM unavailable: %s", str(e)[:200])
+        return {**state, "retrieved_context": context, "retrieved_files": retrieved_files,
+                "patch": "", "edits": [], "edit_errors": [f"engineer produced no edits: {str(e)[:300]}"],
+                "status": "reviewing"}
+    return _apply(state, result, context, retrieved_files)
+
+
+def _ask(state: NexusState, plan_text: str, context: str) -> "EngineerOutput":
+    return llm.call(
         "engineer",
         ENGINEER_SYSTEM,
         f"## GitHub Issue\nTitle: {state['issue_title']}\nBody: {state['issue_body'][:2000]}\n\n"
@@ -59,6 +71,9 @@ def run_engineer(state: NexusState) -> NexusState:
         schema=EngineerOutput,
     )
 
+
+
+def _apply(state: NexusState, result: "EngineerOutput", context: str, retrieved_files: list[str]) -> NexusState:
     patch, edit_errors = build_patch(state.get("repo_path", ""), result.edits)
     logger.info(f"[engineer] Patch drafted (self-reported confidence {result.confidence:.2f})")
     return {

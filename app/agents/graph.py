@@ -41,6 +41,11 @@ def should_reflect(state: NexusState) -> str:
     return "reflect"
 
 
+def after_reflect(state: NexusState) -> str:
+    """A reflector that couldn't reach any model ends the run with the best attempt."""
+    return "done" if state.get("status") == "done" else "review"
+
+
 def finalize(state: NexusState) -> NexusState:
     if state.get("best_patch") and not state.get("review_passed"):
         state = {
@@ -64,7 +69,7 @@ def build_nexus_graph():
     g.add_edge("planner", "engineer")
     g.add_edge("engineer", "reviewer")
     g.add_conditional_edges("reviewer", should_reflect, {"done": "finalize", "reflect": "reflector"})
-    g.add_edge("reflector", "reviewer")
+    g.add_conditional_edges("reflector", after_reflect, {"review": "reviewer", "done": "finalize"})
     g.add_edge("finalize", END)
     return g.compile()
 

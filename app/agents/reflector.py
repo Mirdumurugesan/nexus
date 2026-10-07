@@ -51,7 +51,16 @@ def run_reflector(state: NexusState) -> NexusState:
         return {**state, "reflection_count": round_no, "status": "done"}
 
     issues = "\n".join(f"- {i}" for i in state.get("review_issues", [])) or "- (none listed)"
-    result: ReflectorOutput = llm.call(
+    try:
+        result: ReflectorOutput = _ask(state, issues)
+    except llm.LLMUnavailable as e:
+        logger.warning("[reflector] LLM unavailable, stopping with best attempt: %s", str(e)[:200])
+        return {**state, "reflection_count": round_no, "status": "done", "error": f"reflector: {str(e)[:300]}"}
+    return _apply(state, result, round_no)
+
+
+def _ask(state: NexusState, issues: str) -> "ReflectorOutput":
+    return llm.call(
         "reflector",
         REFLECTOR_SYSTEM,
         f"## Issue\nTitle: {state['issue_title']}\nBody: {state['issue_body'][:1200]}\n\n"
@@ -63,6 +72,9 @@ def run_reflector(state: NexusState) -> NexusState:
         schema=ReflectorOutput,
     )
 
+
+
+def _apply(state: NexusState, result: "ReflectorOutput", round_no: int) -> NexusState:
     patch, edit_errors = build_patch(state.get("repo_path", ""), result.edits)
     return {
         **state,

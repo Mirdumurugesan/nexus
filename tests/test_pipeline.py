@@ -50,3 +50,32 @@ def test_cli_demo_exit_code(capsys):
     from app.cli import main
     assert main(["demo"]) == 0
     assert "VERIFIED" in capsys.readouterr().out
+
+
+def _outage(role_down):
+    from app.core import llm as _llm
+
+    def fn(role, schema, system, user):
+        if role in role_down:
+            raise _llm.LLMUnavailable(f"All LLM providers failed for {role}: 429")
+        return scripted_llm(role, schema, system, user)
+    return fn
+
+
+def test_reviewer_outage_keeps_gate_passing_patch(wealth_repo):
+    from app.demo import CORRECT_EDIT
+
+    def fn(role, schema, system, user):
+        if role == "engineer":
+            return schema(edits=[CORRECT_EDIT], confidence=0.9)
+        return _outage({"reviewer", "reflector"})(role, schema, system, user)
+
+    r = _solve(wealth_repo, fn)
+    assert r.gate_passed and not r.passed
+    assert "+    r = monthly_rate(annual_rate_pct)" in r.patch
+    assert "reflector" in r.error
+
+
+def test_planner_and_engineer_outage_do_not_crash(wealth_repo):
+    r = _solve(wealth_repo, _outage({"planner", "engineer", "reflector"}))
+    assert not r.passed and r.patch == "" and r.plan == []

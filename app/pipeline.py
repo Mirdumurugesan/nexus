@@ -126,6 +126,7 @@ def solve_issue(
             cost_usd=round(usage.cost_usd, 6),
             budget_exhausted=usage.total_tokens >= get_settings().max_tokens_per_task,
             seconds=round(time.time() - t0, 2),
+            error=state.get("error", ""),
         )
     finally:
         from app.rag.local_index import drop_local_index

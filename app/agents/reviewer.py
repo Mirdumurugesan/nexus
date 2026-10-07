@@ -58,16 +58,22 @@ def run_reviewer(state: NexusState) -> NexusState:
     logger.info(f"[reviewer] {gate.summary()}")
 
     if gate.passed:
-        review: ReviewOutput = llm.call(
-            "reviewer",
-            REVIEWER_SYSTEM,
-            f"## Issue\nTitle: {state['issue_title']}\nBody: {state['issue_body'][:1200]}\n\n"
-            f"## Patch\n{state.get('patch', '')}\n\n"
-            f"## Root cause claimed by author\n{state.get('root_cause', '')}\n\n"
-            f"## Deterministic checks\n{gate.summary()}\n\nReview:",
-            schema=ReviewOutput,
-        )
-        score, feedback, issues = review.score, review.feedback, list(review.issues_found)
+        try:
+            review: ReviewOutput = llm.call(
+                "reviewer",
+                REVIEWER_SYSTEM,
+                f"## Issue\nTitle: {state['issue_title']}\nBody: {state['issue_body'][:1200]}\n\n"
+                f"## Patch\n{state.get('patch', '')}\n\n"
+                f"## Root cause claimed by author\n{state.get('root_cause', '')}\n\n"
+                f"## Deterministic checks\n{gate.summary()}\n\nReview:",
+                schema=ReviewOutput,
+            )
+            score, feedback, issues = review.score, review.feedback, list(review.issues_found)
+        except llm.LLMUnavailable as e:
+            # Keep the gate-passing patch as a candidate; just don't call it verified.
+            logger.warning("[reviewer] LLM review unavailable: %s", str(e)[:200])
+            score, feedback, issues = 0.0, "LLM review unavailable (provider error)", []
+            state = {**state, "error": f"reviewer: {str(e)[:300]}"}
     else:
         score = 0.0
         feedback = "The patch failed deterministic checks. Fix these first:\n" + "\n".join(gate.errors)

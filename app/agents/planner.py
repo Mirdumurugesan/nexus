@@ -32,7 +32,17 @@ class PlannerOutput(BaseModel):
 
 def run_planner(state: NexusState) -> NexusState:
     logger.info(f"[planner] Planning fix for: {state['issue_title']}")
-    result: PlannerOutput = llm.call(
+    try:
+        result: PlannerOutput = _ask(state)
+    except llm.LLMUnavailable as e:
+        # The engineer can work from the issue alone; a plan is a guide, not a gate.
+        logger.warning("[planner] LLM unavailable, continuing without a plan: %s", str(e)[:200])
+        return {**state, "plan": [], "plan_reasoning": "", "status": "engineering"}
+    return _apply(state, result)
+
+
+def _ask(state: NexusState) -> "PlannerOutput":
+    return llm.call(
         "planner",
         PLANNER_SYSTEM,
         f"Issue Title: {state['issue_title']}\n"
@@ -41,6 +51,9 @@ def run_planner(state: NexusState) -> NexusState:
         schema=PlannerOutput,
     )
 
+
+
+def _apply(state: NexusState, result: "PlannerOutput") -> NexusState:
     plan: list[SubTask] = []
     for st in result.subtasks[:4]:
         item = st if isinstance(st, PlanItem) else PlanItem(**st)

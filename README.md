@@ -4,7 +4,7 @@
 
 [![ci](https://github.com/Mirdumurugesan/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Mirdumurugesan/nexus/actions/workflows/ci.yml)
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
-![tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-88%20passing-brightgreen)
 
 NEXUS is a multi-agent pipeline built with LangGraph. A **Planner** breaks the issue into subtasks, an **Engineer** writes a diff from code it retrieves, a **Reviewer** decides whether the diff ships, and a **Reflector** repairs rejected diffs.
 
@@ -51,6 +51,7 @@ flowchart LR
 | **Finalize** | Returns the **best** attempt, ranked by (gate passed, score) | A reflection round that makes the patch worse can't overwrite a better earlier one |
 | **Structured output** | If a provider's function calling fails (Groq `tool_use_failed`), the same model is asked for plain JSON against the schema before failing over | One flaky feature doesn't cost a provider |
 | **LLM layer** | One `llm.call(role, ...)` over a provider chain from config (`PRIMARY_LLM=groq/openai/gpt-oss-120b` → `FALLBACK_LLM=google/gemini-3.6-flash`, OpenAI optional). Missing keys are skipped, tokens and cost are counted | Moving providers is a config change. Tests swap in a scripted model by role without patching anything |
+| **Outages** | If every provider is down mid-run, the planner is skipped, the engineer's turn becomes a recorded failure, and a failed review or reflection ends the run with the best gate-passing patch instead of crashing | Hours of free-tier rate limits shouldn't throw away a patch that already applies |
 | **Budget** | `MAX_TOKENS_PER_TASK` is a hard kill switch: once spent, the loop stops and returns its best attempt | A stuck reflection loop can't burn a quota |
 
 ### The demo bug
@@ -68,7 +69,7 @@ git clone https://github.com/Mirdumurugesan/nexus && cd nexus
 python -m venv venv && source venv/bin/activate      # Windows: .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-python -m pytest                     # 86 tests, offline, no keys
+python -m pytest                     # 88 tests, offline, no keys
 python -m app.cli demo               # scripted LLM, real gate
 ```
 
@@ -148,12 +149,12 @@ app/
   api/ auth/ db/
 demo/fixture/  the buggy wealth library used by the demo and the tests
 evals/         SWE-bench Lite runner → harness-format predictions
-tests/         86 tests: edit matching, gate against real git, retrieval, fallback chain, budget, agents, end-to-end loop, API, eval
+tests/         88 tests: edit matching, gate against real git, retrieval, fallback chain, budget, agents, end-to-end loop, API, eval
 ```
 
 ## Testing
 
-`python -m pytest` runs 86 tests in about 15 seconds with no network or keys, on Python 3.11 to 3.13 in CI. The tests check behaviour, not just mocks:
+`python -m pytest` runs 88 tests in about 15 seconds with no network or keys, on Python 3.11 to 3.13 in CI. The tests check behaviour, not just mocks:
 
 - the gate rejects made-up context, broken syntax, a diff that applies but fails tests, and `../` path traversal, and leaves `git status` clean every time
 - a reviewer that says 0.99 can't pass a diff that doesn't apply, and isn't even called
