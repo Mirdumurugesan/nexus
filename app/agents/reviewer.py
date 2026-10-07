@@ -34,7 +34,7 @@ Give specific, actionable feedback."""
 
 class ReviewOutput(BaseModel):
     score: float = Field(description="Overall quality score 0.0-1.0", ge=0.0, le=1.0)
-    feedback: str = Field(description="Specific, actionable feedback")
+    feedback: str = Field(default="", description="Specific, actionable feedback")
     issues_found: list[str] = Field(default_factory=list, description="Concrete problems (empty if none)")
 
 

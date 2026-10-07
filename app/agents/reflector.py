@@ -29,8 +29,8 @@ MAX_REFLECTIONS = get_settings().max_reflections
 
 class ReflectorOutput(BaseModel):
     edits: list[Edit] = Field(description="Complete search/replace edits against the original files")
-    changes_made: str = Field(description="What changed vs the previous patch and why")
-    new_confidence: float = Field(description="Confidence in the improved patch 0.0-1.0", ge=0.0, le=1.0)
+    changes_made: str = Field(default="", description="What changed vs the previous patch and why")
+    new_confidence: float = Field(default=0.5, description="Confidence in the improved patch 0.0-1.0", ge=0.0, le=1.0)
 
 
 def _fmt_edits(edits: list) -> str:

@@ -172,8 +172,8 @@ _WAIT = re.compile(r"try again in (?:(\d+)m)?([\d.]+)s", re.I)
 
 
 def _rate_limit_wait(errors: list[str]) -> Optional[float]:
-    """If every failure was a rate limit, how long the APIs asked us to wait (else None)."""
-    if not errors or not all(_RATE.search(e) for e in errors):
+    """If any provider was rate-limited, how long it asked us to wait (else None)."""
+    if not errors or not any(_RATE.search(e) for e in errors):
         return None
     waits = []
     for e in errors:

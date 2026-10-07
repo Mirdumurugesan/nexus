@@ -27,10 +27,12 @@ fix needs and keep the existing style. Do not return a diff."""
 
 
 class EngineerOutput(BaseModel):
-    root_cause: str = Field(description="One sentence: the root cause of the bug")
-    approach: str = Field(description="One sentence: how the patch fixes it")
+    # Only `edits` is required: in the first live SWE-bench run, Groq rejected
+    # otherwise-good tool calls for a missing `root_cause`.
     edits: list[Edit] = Field(description="Search/replace edits that implement the fix")
-    confidence: float = Field(description="0.0-1.0 confidence in the fix", ge=0.0, le=1.0)
+    root_cause: str = Field(default="", description="One sentence: the root cause of the bug")
+    approach: str = Field(default="", description="One sentence: how the patch fixes it")
+    confidence: float = Field(default=0.5, description="0.0-1.0 confidence in the fix", ge=0.0, le=1.0)
     test_hint: str = Field(default="", description="What to test to verify the fix")
 
 

@@ -155,3 +155,12 @@ def test_unparseable_json_fallback_moves_to_next_provider(chain):
 def test_extract_json():
     assert llm.extract_json('prefix {"a": {"b": 1}} suffix') == '{"a": {"b": 1}}'
     assert llm.extract_json('```json\n{"a": 1}\n```') == '{"a": 1}'
+
+
+def test_mixed_rate_limit_and_other_error_still_waits(chain, monkeypatch):
+    """Live run: 120b hit TPM (429) while 20b returned a 400; waiting lets 120b recover."""
+    slept = []
+    monkeypatch.setattr(llm, "_sleep", slept.append)
+    chain({"groq/a": _RateLimited(1), "groq/b": _Model(True)})
+    assert llm.call("reflector", "s", "u", schema=Out).x == 7
+    assert slept == [8.0]

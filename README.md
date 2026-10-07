@@ -4,7 +4,7 @@
 
 [![ci](https://github.com/Mirdumurugesan/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Mirdumurugesan/nexus/actions/workflows/ci.yml)
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
-![tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)
 
 NEXUS is a multi-agent pipeline built with LangGraph. A **Planner** breaks the issue into subtasks, an **Engineer** writes a diff from code it retrieves, a **Reviewer** decides whether the diff ships, and a **Reflector** repairs rejected diffs.
 
@@ -68,7 +68,7 @@ git clone https://github.com/Mirdumurugesan/nexus && cd nexus
 python -m venv venv && source venv/bin/activate      # Windows: .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-python -m pytest                     # 85 tests, offline, no keys
+python -m pytest                     # 86 tests, offline, no keys
 python -m app.cli demo               # scripted LLM, real gate
 ```
 
@@ -148,12 +148,12 @@ app/
   api/ auth/ db/
 demo/fixture/  the buggy wealth library used by the demo and the tests
 evals/         SWE-bench Lite runner → harness-format predictions
-tests/         85 tests: edit matching, gate against real git, retrieval, fallback chain, budget, agents, end-to-end loop, API, eval
+tests/         86 tests: edit matching, gate against real git, retrieval, fallback chain, budget, agents, end-to-end loop, API, eval
 ```
 
 ## Testing
 
-`python -m pytest` runs 85 tests in about 15 seconds with no network or keys, on Python 3.11 to 3.13 in CI. The tests check behaviour, not just mocks:
+`python -m pytest` runs 86 tests in about 15 seconds with no network or keys, on Python 3.11 to 3.13 in CI. The tests check behaviour, not just mocks:
 
 - the gate rejects made-up context, broken syntax, a diff that applies but fails tests, and `../` path traversal, and leaves `git status` clean every time
 - a reviewer that says 0.99 can't pass a diff that doesn't apply, and isn't even called
