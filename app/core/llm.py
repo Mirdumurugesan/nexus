@@ -231,21 +231,67 @@ def _call_once(role: str, system: str, user: str, schema, cheap: bool):
         provider, model = split_spec(spec)
         try:
             chat = build_chat_model(spec)
-            if schema is not None:
+            if schema is None:
+                msg = chat.invoke(messages)
+                _record_msg(provider, model, msg)
+                return _text(msg)
+            try:
                 parsed, in_tok, out_tok = unpack_structured(
                     chat.with_structured_output(schema, include_raw=True).invoke(messages))
                 _record(provider, model, in_tok, out_tok)
                 return parsed
-            msg = chat.invoke(messages)
-            usage = getattr(msg, "usage_metadata", None) or {}
-            _record(provider, model, int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0)))
-            return (msg.content if isinstance(msg.content, str) else str(msg.content)).strip()
+            except Exception as e:  # noqa: BLE001
+                if _RATE.search(str(e)):
+                    raise
+                # Tool/function calling is the flakiest part of structured output
+                # (Groq: "tool_use_failed"). Ask the same model for plain JSON instead.
+                logger.warning("[llm] %s via %s: structured call failed (%s: %s); retrying as plain JSON",
+                               role, spec, type(e).__name__, str(e)[:160])
+                return _json_fallback(chat, provider, model, schema, system, user)
         except Exception as e:  # noqa: BLE001 — any provider failure moves down the chain
             err = f"{spec}: {type(e).__name__}: {str(e)[:300]}"
             errors.append(err)
             u = _usage.get()
             if u is not None:
                 u.failures.append(f"[{role}] {err}")
-            logger.warning("[llm] %s via %s failed (%s) -> next provider", role, spec, type(e).__name__)
+            logger.warning("[llm] %s via %s failed (%s: %s) -> next provider",
+                           role, spec, type(e).__name__, str(e)[:200])
 
     raise _ChainFailed(errors)
+
+
+def _text(msg) -> str:
+    c = msg.content
+    if isinstance(c, list):  # some providers return content blocks
+        c = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in c)
+    return str(c).strip()
+
+
+def _record_msg(provider: str, model: str, msg) -> None:
+    usage = getattr(msg, "usage_metadata", None) or {}
+    _record(provider, model, int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0)))
+
+
+def extract_json(text: str) -> str:
+    """Pull the outermost JSON object out of a reply (handles ```json fences and prose)."""
+    t = text.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", t, re.S)
+    if fence:
+        return fence.group(1)
+    start, end = t.find("{"), t.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in model reply")
+    return t[start:end + 1]
+
+
+def _json_fallback(chat, provider: str, model: str, schema, system: str, user: str):
+    import json
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+    instr = (
+        "\n\nRespond with ONLY one JSON object (no prose, no markdown) that validates against "
+        f"this JSON Schema:\n{json.dumps(schema.model_json_schema())}"
+    )
+    msg = chat.invoke([SystemMessage(content=system + instr), HumanMessage(content=user)])
+    _record_msg(provider, model, msg)
+    return schema.model_validate_json(extract_json(_text(msg)))

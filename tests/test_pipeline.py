@@ -3,7 +3,7 @@ import sys
 
 from app.core import llm
 from app.core.config import get_settings
-from app.demo import CORRECT_PATCH, HALLUCINATED_PATCH, scripted_llm
+from app.demo import HALLUCINATED_EDIT, scripted_llm
 from app.pipeline import solve_issue
 
 
@@ -19,7 +19,9 @@ def test_demo_converges_after_one_reflection(wealth_repo, monkeypatch):
     assert r.passed and r.gate_passed
     assert r.reflections == 1
     assert [h["gate_passed"] for h in r.history] == [False, True]
-    assert r.patch.strip() == CORRECT_PATCH.strip()
+    assert r.patch.startswith("--- a/wealth/sip.py")
+    assert "-    r = annual_rate_pct / 100\n+    r = monthly_rate(annual_rate_pct)" in r.patch
+    assert "search block not found" in r.history[0]["gate_summary"]
     assert r.retrieved_files[0] == "wealth/sip.py"
     assert r.llm_calls == 5  # hyde, planner, engineer, reflector, reviewer (no review of the broken patch)
     assert r.gate["tests_passed"] is True
@@ -29,7 +31,7 @@ def test_demo_converges_after_one_reflection(wealth_repo, monkeypatch):
 def test_never_converging_run_returns_best_attempt_unverified(wealth_repo):
     def fn(role, schema, system, user):
         if role == "reflector":
-            return schema(improved_patch=HALLUCINATED_PATCH, changes_made="nope", new_confidence=0.9)
+            return schema(edits=[HALLUCINATED_EDIT], changes_made="nope", new_confidence=0.9)
         return scripted_llm(role, schema, system, user)
 
     r = _solve(wealth_repo, fn)

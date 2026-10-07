@@ -40,7 +40,9 @@ class NexusState(TypedDict, total=False):
     retrieved_context: str
     retrieved_files: list[str]
 
-    # Current patch
+    # Current attempt: search/replace edits -> NEXUS-built unified diff
+    edits: list[dict]
+    edit_errors: list[str]
     patch: str
     patch_explanation: str
     files_modified: list[str]
@@ -74,6 +76,7 @@ def initial_state(**kw) -> NexusState:
         "repo_url": "", "repo_path": "", "index_key": "", "use_hyde": True,
         "plan": [], "plan_reasoning": "",
         "retrieved_context": "", "retrieved_files": [],
+        "edits": [], "edit_errors": [],
         "patch": "", "patch_explanation": "", "files_modified": [],
         "confidence": 0.0, "root_cause": "",
         "gate": {}, "review_score": 0.0, "review_feedback": "", "review_issues": [],

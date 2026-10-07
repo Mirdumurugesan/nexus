@@ -109,14 +109,14 @@ def check_patch(repo_path: str, patch: str, test_command: str = "", test_timeout
         result.errors.append(f"patch touches paths outside the repository: {bad}")
         return result
 
-    check = _git(repo_path, "apply", "--check", "--recount", "--whitespace=nowarn", "-", stdin=patch)
+    check = _git(repo_path, "apply", "--check", "--whitespace=nowarn", "-", stdin=patch)
     if check.returncode != 0:
         result.errors.append("git apply --check: " + (check.stderr.strip() or "rejected")[:600])
         return result
     result.applies = True
 
     try:
-        applied = _git(repo_path, "apply", "--recount", "--whitespace=nowarn", "-", stdin=patch)
+        applied = _git(repo_path, "apply", "--whitespace=nowarn", "-", stdin=patch)
         if applied.returncode != 0:  # pragma: no cover — --check passed, so this is unexpected
             result.applies = False
             result.errors.append("git apply: " + applied.stderr.strip()[:600])

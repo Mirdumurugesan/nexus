@@ -8,7 +8,8 @@ from app.core import llm
 from app.core.config import get_settings
 from app.agents.state import NexusState
 from app.rag.retriever import format_context_for_llm, hybrid_retrieve
-from app.tools.patch_gate import clean_patch, files_in_patch
+from app.tools.edits import Edit, build_patch
+from app.tools.patch_gate import files_in_patch
 
 logger = logging.getLogger(__name__)
 
@@ -18,16 +19,17 @@ You get a plan and code context retrieved from the repository. Code context line
 are prefixed with their real line number as `  N | `. NEVER copy those prefixes
 into the diff.
 
-Return a minimal unified diff (--- a/path, +++ b/path, @@ hunks) that applies
-with `git apply`. Context lines must match the file exactly, including
-indentation. Change only what the fix needs; keep the existing style."""
+Return the fix as search/replace edits. For each edit, `search` must be lines
+copied EXACTLY from the code context (same indentation, without the `  N | `
+prefix) and should be just large enough to be unique; `replace` is what those
+lines become. To create a new file use an empty `search`. Change only what the
+fix needs and keep the existing style. Do not return a diff."""
 
 
 class EngineerOutput(BaseModel):
     root_cause: str = Field(description="One sentence: the root cause of the bug")
     approach: str = Field(description="One sentence: how the patch fixes it")
-    patch: str = Field(description="Complete unified diff (--- a/file +++ b/file)")
-    files_modified: list[str] = Field(default_factory=list, description="File paths modified")
+    edits: list[Edit] = Field(description="Search/replace edits that implement the fix")
     confidence: float = Field(description="0.0-1.0 confidence in the fix", ge=0.0, le=1.0)
     test_hint: str = Field(default="", description="What to test to verify the fix")
 
@@ -51,11 +53,11 @@ def run_engineer(state: NexusState) -> NexusState:
         "engineer",
         ENGINEER_SYSTEM,
         f"## GitHub Issue\nTitle: {state['issue_title']}\nBody: {state['issue_body'][:2000]}\n\n"
-        f"## Plan\n{plan_text}\n\n## Relevant Code Context\n{context}\n\nWrite the unified diff:",
+        f"## Plan\n{plan_text}\n\n## Relevant Code Context\n{context}\n\nReturn the edits:",
         schema=EngineerOutput,
     )
 
-    patch = clean_patch(result.patch)
+    patch, edit_errors = build_patch(state.get("repo_path", ""), result.edits)
     logger.info(f"[engineer] Patch drafted (self-reported confidence {result.confidence:.2f})")
     return {
         **state,
@@ -65,7 +67,9 @@ def run_engineer(state: NexusState) -> NexusState:
         "patch_explanation": (
             f"Root cause: {result.root_cause}\nApproach: {result.approach}\nTest: {result.test_hint}"
         ),
-        "files_modified": files_in_patch(patch) or result.files_modified,
+        "edits": [e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in result.edits],
+        "edit_errors": edit_errors,
+        "files_modified": files_in_patch(patch) or sorted({(e.file if hasattr(e, "file") else e["file"]) for e in result.edits}),
         "confidence": result.confidence,
         "root_cause": result.root_cause,
         "status": "reviewing",

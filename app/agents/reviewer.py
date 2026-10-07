@@ -39,6 +39,8 @@ class ReviewOutput(BaseModel):
 
 
 def _gate(state: NexusState) -> GateResult:
+    if state.get("edit_errors"):
+        return GateResult(passed=False, errors=list(state["edit_errors"]))
     repo_path = state.get("repo_path") or ""
     if not repo_path:
         files = files_in_patch(state.get("patch", ""))

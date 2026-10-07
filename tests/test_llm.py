@@ -117,3 +117,41 @@ def test_gives_up_after_retry_budget(chain, monkeypatch):
     chain({"groq/a": _RateLimited(99)})
     with pytest.raises(llm.LLMUnavailable, match="429"):
         llm.call("engineer", "s", "u", schema=Out)
+
+
+class _ToolFails(_Model):
+    """Function calling breaks (Groq tool_use_failed) but plain text works."""
+    def __init__(self, reply):
+        super().__init__(False)
+        self.reply = reply
+
+    def with_structured_output(self, schema, include_raw=False):
+        outer = self
+
+        class _S:
+            def invoke(self, m):
+                raise RuntimeError("Error code: 400 - tool_use_failed: Failed to call a function")
+        return _S()
+
+    def invoke(self, messages):
+        assert "JSON Schema" in messages[0].content
+        return MagicMock(content=self.reply, usage_metadata={"input_tokens": 50, "output_tokens": 5})
+
+
+def test_structured_failure_falls_back_to_plain_json_same_provider(chain):
+    chain({"groq/a": _ToolFails('Sure! ```json\n{"x": 3}\n```')})
+    with llm.track_usage() as u:
+        assert llm.call("engineer", "s", "u", schema=Out).x == 3
+    assert u.by_provider == {"groq": 1} and u.failures == []
+
+
+def test_unparseable_json_fallback_moves_to_next_provider(chain):
+    chain({"groq/a": _ToolFails("I cannot do that"), "google/b": _Model(False)})
+    with llm.track_usage() as u:
+        assert llm.call("engineer", "s", "u", schema=Out).x == 7
+    assert u.by_provider["google"] == 1 and "groq/a" in u.failures[0]  # groq tokens still counted
+
+
+def test_extract_json():
+    assert llm.extract_json('prefix {"a": {"b": 1}} suffix') == '{"a": {"b": 1}}'
+    assert llm.extract_json('```json\n{"a": 1}\n```') == '{"a": 1}'

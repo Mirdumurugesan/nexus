@@ -31,7 +31,7 @@ def test_full_loop_writes_harness_predictions(wealth_repo, tmp_path, monkeypatch
     assert summary["gate_pass_pct"] == 100.0 and summary["file_hit_pct"] == 100.0
     pred = json.loads((tmp_path / "out" / "predictions.jsonl").read_text().strip())
     assert set(pred) == {"instance_id", "model_name_or_path", "model_patch"}
-    assert pred["model_patch"].strip() == CORRECT_PATCH.strip()
+    assert "+    r = monthly_rate(annual_rate_pct)" in pred["model_patch"]
 
 
 def test_crash_is_recorded_not_fatal(tmp_path, monkeypatch):

@@ -11,25 +11,35 @@ from pydantic import BaseModel, Field
 from app.core import llm
 from app.agents.state import NexusState
 from app.core.config import get_settings
-from app.tools.patch_gate import clean_patch, files_in_patch
+from app.tools.edits import Edit, build_patch
+from app.tools.patch_gate import files_in_patch
 
 logger = logging.getLogger(__name__)
 
 REFLECTOR_SYSTEM = """You are an expert software engineer repairing a rejected patch.
 
-Address EVERY problem in the feedback. If the patch did not apply, the context
-lines did not match the file: re-read the code context (lines are prefixed with
-`  N | `, never copy the prefix) and reproduce context lines exactly.
-Return a complete, minimal unified diff."""
+Address EVERY problem in the feedback. Return the COMPLETE set of search/replace
+edits against the ORIGINAL files (earlier edits were not kept). If a search block
+was "not found", copy the lines exactly from the code context (same indentation,
+without the `  N | ` prefix). Keep edits minimal. Do not return a diff."""
 
 # Kept for backwards compatibility with imports elsewhere.
 MAX_REFLECTIONS = get_settings().max_reflections
 
 
 class ReflectorOutput(BaseModel):
-    improved_patch: str = Field(description="The improved patch in unified diff format")
+    edits: list[Edit] = Field(description="Complete search/replace edits against the original files")
     changes_made: str = Field(description="What changed vs the previous patch and why")
     new_confidence: float = Field(description="Confidence in the improved patch 0.0-1.0", ge=0.0, le=1.0)
+
+
+def _fmt_edits(edits: list) -> str:
+    if not edits:
+        return "(none)"
+    return "\n".join(
+        f"--- edit {i + 1}: {e.get('file')}\nSEARCH:\n{e.get('search', '')}\nREPLACE:\n{e.get('replace', '')}"
+        for i, e in enumerate(edits)
+    )
 
 
 def run_reflector(state: NexusState) -> NexusState:
@@ -45,17 +55,20 @@ def run_reflector(state: NexusState) -> NexusState:
         "reflector",
         REFLECTOR_SYSTEM,
         f"## Issue\nTitle: {state['issue_title']}\nBody: {state['issue_body'][:1200]}\n\n"
-        f"## Rejected patch\n{state.get('patch', '')}\n\n"
+        f"## Rejected edits\n{_fmt_edits(state.get('edits', []))}\n\n"
+        f"## Resulting diff\n{state.get('patch', '') or '(none: the edits could not be applied)'}\n\n"
         f"## Review (score {state.get('review_score', 0):.2f})\n{state.get('review_feedback', '')}\n"
         f"Issues:\n{issues}\n\n"
-        f"## Code context\n{state.get('retrieved_context', '')[:get_settings().context_tokens * 2]}\n\nImproved diff:",
+        f"## Code context\n{state.get('retrieved_context', '')[:get_settings().context_tokens * 2]}\n\nReturn the improved edits:",
         schema=ReflectorOutput,
     )
 
-    patch = clean_patch(result.improved_patch)
+    patch, edit_errors = build_patch(state.get("repo_path", ""), result.edits)
     return {
         **state,
         "patch": patch,
+        "edits": [e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in result.edits],
+        "edit_errors": edit_errors,
         "files_modified": files_in_patch(patch) or state.get("files_modified", []),
         "patch_explanation": state.get("patch_explanation", "")
         + f"\n[Reflection {round_no}]: {result.changes_made}",

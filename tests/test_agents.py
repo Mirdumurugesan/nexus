@@ -6,7 +6,7 @@ from app.agents.reflector import run_reflector
 from app.agents.reviewer import run_reviewer
 from app.agents.state import initial_state
 from app.core.config import get_settings
-from app.demo import CORRECT_PATCH, HALLUCINATED_PATCH
+from app.demo import CORRECT_EDIT, CORRECT_PATCH, HALLUCINATED_EDIT, HALLUCINATED_PATCH
 
 
 def state(**kw):
@@ -69,19 +69,30 @@ def test_worse_reflection_does_not_replace_best(wealth_repo):
     assert final["patch"] == CORRECT_PATCH and final["review_score"] == 0.6
 
 
-def test_reflector_gets_gate_errors_and_cleans_output():
+def test_reflector_gets_gate_errors_and_builds_a_real_diff(wealth_repo):
     seen = {}
 
     def fn(role, schema, system, user):
         seen["user"] = user
-        return schema(improved_patch="```diff\n" + CORRECT_PATCH + "```", changes_made="fixed", new_confidence=0.8)
+        return schema(edits=[CORRECT_EDIT], changes_made="fixed", new_confidence=0.8)
 
     with llm.use_llm(fn):
-        out = run_reflector(state(patch=HALLUCINATED_PATCH, review_issues=["git apply --check: wealth/sip.py:9"]))
-    assert "wealth/sip.py:9" in seen["user"]
+        out = run_reflector(state(repo_path=wealth_repo, edits=[HALLUCINATED_EDIT],
+                                  review_issues=["wealth/sip.py: search block not found"]))
+    assert "search block not found" in seen["user"] and "rate = annual_rate_pct" in seen["user"]
     assert out["patch"].startswith("--- a/wealth/sip.py")
-    assert out["files_modified"] == ["wealth/sip.py"]
+    assert "+    r = monthly_rate(annual_rate_pct)" in out["patch"]
+    assert out["edit_errors"] == [] and out["files_modified"] == ["wealth/sip.py"]
     assert out["reflection_count"] == 1 and out["status"] == "reviewing"
+
+
+def test_edit_errors_fail_the_gate_without_calling_the_llm():
+    called = []
+    fn = replies(reviewer=lambda S: called.append(1) or S(score=0.99, feedback="great"))
+    with llm.use_llm(fn):
+        out = run_reviewer(state(edit_errors=["wealth/sip.py: search block not found"]))
+    assert out["review_passed"] is False and called == []
+    assert out["review_issues"] == ["wealth/sip.py: search block not found"]
 
 
 def test_reflector_stops_after_max_rounds():

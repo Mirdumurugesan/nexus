@@ -4,7 +4,7 @@
 
 [![ci](https://github.com/Mirdumurugesan/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Mirdumurugesan/nexus/actions/workflows/ci.yml)
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
-![tests](https://img.shields.io/badge/tests-73%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)
 
 NEXUS is a multi-agent pipeline built with LangGraph. A **Planner** breaks the issue into subtasks, an **Engineer** writes a diff from code it retrieves, a **Reviewer** decides whether the diff ships, and a **Reflector** repairs rejected diffs.
 
@@ -30,11 +30,12 @@ flowchart LR
     C --> R[Hybrid retrieval<br/>BM25 · symbols · HyDE → RRF]
     R --> P[Planner]
     P --> E[Engineer]
-    E --> G{Patch gate<br/>git apply · compile · tests}
+    E -- search/replace edits --> B[Diff builder<br/>difflib]
+    B --> G{Patch gate<br/>git apply · compile · tests}
     G -- fails --> F[Reflector]
     G -- passes --> V[LLM reviewer]
     V -- score below 0.7 --> F
-    F --> G
+    F --> B
     V -- score 0.7 or above --> D[Finalize: best attempt]
     F -. out of rounds .-> D
 ```
@@ -43,11 +44,12 @@ flowchart LR
 |---|---|---|
 | **Chunking** | tree-sitter splits Python into functions, classes and methods | A function is never cut in half, so the LLM always sees whole units |
 | **Retrieval** | Three rankings fused with Reciprocal Rank Fusion (k=60): BM25 on code, BM25 on *symbols* (path + name), BM25 on HyDE code | Issues often name the function that's broken, and the symbol ranking lets that exact name win. HyDE turns prose into code-shaped queries |
-| **Context** | Retrieved code is shown with real line numbers (`  12 \| ...`) | Hunks then land on the right lines. The prompt forbids copying the prefixes |
+| **Edits, not diffs** | Agents return search/replace blocks; NEXUS finds them in the file (exact → trailing-whitespace → indentation-tolerant, must be unique) and builds the unified diff itself with `difflib` | Models are bad at diff line numbers and some speak their own patch dialects (gpt-oss emitted none of our diffs in the first live run). A search block that isn't found comes back with the closest real line |
 | **Patch gate** | `git apply --check` → apply → `compile()` every touched `.py` → optional test command → **always restore the checkout** | These checks are facts, not opinions. A diff that doesn't apply gets score 0, and the LLM reviewer is never called |
 | **Reviewer** | Runs only on gate-passing diffs. `passed = gate_ok and score ≥ 0.7`, **computed in code** | The model's own "passed: true" is never trusted |
 | **Reflector** | Gets git's or the compiler's exact error, not "seems incomplete" | Concrete errors make the loop converge instead of wander |
 | **Finalize** | Returns the **best** attempt, ranked by (gate passed, score) | A reflection round that makes the patch worse can't overwrite a better earlier one |
+| **Structured output** | If a provider's function calling fails (Groq `tool_use_failed`), the same model is asked for plain JSON against the schema before failing over | One flaky feature doesn't cost a provider |
 | **LLM layer** | One `llm.call(role, ...)` over a provider chain from config (`PRIMARY_LLM=groq/openai/gpt-oss-120b` → `FALLBACK_LLM=google/gemini-3.6-flash`, OpenAI optional). Missing keys are skipped, tokens and cost are counted | Moving providers is a config change. Tests swap in a scripted model by role without patching anything |
 | **Budget** | `MAX_TOKENS_PER_TASK` is a hard kill switch: once spent, the loop stops and returns its best attempt | A stuck reflection loop can't burn a quota |
 
@@ -55,7 +57,7 @@ flowchart LR
 
 `demo/fixture` is a small wealth-planning library with a real bug. `future_value()` compounds the annual rate every month, so a ₹10,000/month SIP at 12% for 10 years shows about ₹75 lakh instead of ₹23.2 lakh. Two of its tests fail.
 
-In the default demo the LLM replies are scripted (`--live` uses real models). The first engineer diff makes up context lines, which is the most common way LLM diffs fail. Everything else is real: the git checkout, retrieval, the LangGraph loop, `git apply`, the compile check and the pytest run.
+In the default demo the LLM replies are scripted (`--live` uses real models). The first engineer edit targets a line that doesn't exist, which is the most common way LLM edits fail. Everything else is real: the git checkout, retrieval, the LangGraph loop, `git apply`, the compile check and the pytest run.
 
 ---
 
@@ -66,7 +68,7 @@ git clone https://github.com/Mirdumurugesan/nexus && cd nexus
 python -m venv venv && source venv/bin/activate      # Windows: .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-python -m pytest                     # 73 tests, offline, no keys
+python -m pytest                     # 85 tests, offline, no keys
 python -m app.cli demo               # scripted LLM, real gate
 ```
 
@@ -136,7 +138,8 @@ Agent runs happen in a worker thread, so a 2-minute run never blocks the event l
 ```
 app/
   agents/      planner · engineer · reviewer (gate + LLM) · reflector · graph (LangGraph) · state
-  tools/       patch_gate.py — git apply / compile / tests, always restores the checkout
+  tools/       edits.py — search/replace blocks → unified diff (tolerant, unique matching)
+               patch_gate.py — git apply / compile / tests, always restores the checkout
                github_parser.py
   rag/         chunker (tree-sitter) · local_index (BM25 + symbols + HyDE, RRF) · retriever · embedder (Weaviate)
   core/llm.py  provider chain (groq · google · openai), role-tagged calls, tokens + cost, test override
@@ -145,12 +148,12 @@ app/
   api/ auth/ db/
 demo/fixture/  the buggy wealth library used by the demo and the tests
 evals/         SWE-bench Lite runner → harness-format predictions
-tests/         73 tests: gate against real git, retrieval, fallback chain, budget, agents, end-to-end loop, API, eval
+tests/         85 tests: edit matching, gate against real git, retrieval, fallback chain, budget, agents, end-to-end loop, API, eval
 ```
 
 ## Testing
 
-`python -m pytest` runs 73 tests in about 15 seconds with no network or keys, on Python 3.11 to 3.13 in CI. The tests check behaviour, not just mocks:
+`python -m pytest` runs 85 tests in about 15 seconds with no network or keys, on Python 3.11 to 3.13 in CI. The tests check behaviour, not just mocks:
 
 - the gate rejects made-up context, broken syntax, a diff that applies but fails tests, and `../` path traversal, and leaves `git status` clean every time
 - a reviewer that says 0.99 can't pass a diff that doesn't apply, and isn't even called
