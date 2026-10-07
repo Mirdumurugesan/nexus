@@ -1,203 +1,106 @@
-"""
-Unit tests for agent logic (mocked LLM calls).
-"""
-import pytest
-from unittest.mock import patch, MagicMock
-from app.agents.state import NexusState
+"""Agent nodes with a scripted LLM (no network)."""
+from app.core import llm
+from app.agents.graph import finalize, should_reflect
+from app.agents.planner import run_planner
+from app.agents.reflector import run_reflector
+from app.agents.reviewer import run_reviewer
+from app.agents.state import initial_state
+from app.core.config import get_settings
+from app.demo import CORRECT_PATCH, HALLUCINATED_PATCH
 
 
-def structured_result(mock_output, in_tokens: int = 100, out_tokens: int = 50) -> dict:
-    """
-    Agents call .with_structured_output(..., include_raw=True), which returns
-    {"raw": AIMessage, "parsed": <model>, "parsing_error": None}.
-    """
-    raw = MagicMock()
-    raw.usage_metadata = {"input_tokens": in_tokens, "output_tokens": out_tokens}
-    return {"raw": raw, "parsed": mock_output, "parsing_error": None}
+def state(**kw):
+    return initial_state(issue_title="SIP overstated", issue_body="uses annual rate monthly",
+                         repo_name="demo/wealth-lib", **kw)
 
 
-def make_state(**overrides) -> NexusState:
-    base: NexusState = {
-        "task_id": "test-123",
-        "issue_title": "Fix proxy handling bug",
-        "issue_body": "When HTTPS_PROXY is set, HTTP requests also use it incorrectly.",
-        "repo_name": "psf/requests",
-        "repo_url": "https://github.com/psf/requests.git",
-        "use_hyde": True,
-        "plan": [],
-        "plan_reasoning": "",
-        "retrieved_context": "def send(self, request, **kwargs):\n    pass",
-        "patch": "",
-        "patch_explanation": "",
-        "files_modified": [],
-        "confidence": 0.0,
-        "root_cause": "",
-        "review_score": 0.0,
-        "review_feedback": "",
-        "review_passed": False,
-        "review_issues_found": [],
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "reflection_count": 0,
-        "error": "",
-        "status": "planning",
-    }
-    base.update(overrides)
-    return base
+def replies(**by_role):
+    def fn(role, schema, system, user):
+        val = by_role[role]
+        return val(schema) if callable(val) else val
+    return fn
 
 
-class TestPlannerAgent:
-    def test_planner_adds_plan_to_state(self):
-        from app.agents.planner import run_planner
-
-        mock_output = MagicMock()
-        mock_output.reasoning = "The proxy merge logic incorrectly applies HTTPS_PROXY to HTTP."
-        mock_output.subtasks = [
-            {"description": "Fix merge_environment_settings", "file_hint": "requests/adapters.py"},
-            {"description": "Add test for HTTP-only proxy", "file_hint": "tests/test_proxies.py"},
-        ]
-
-        with patch("app.agents.planner.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
-            state = make_state()
-            result = run_planner(state)
-
-        assert len(result["plan"]) == 2
-        assert result["plan_reasoning"] != ""
-        assert result["status"] == "engineering"
-
-    def test_planner_plan_has_required_fields(self):
-        from app.agents.planner import run_planner
-
-        mock_output = MagicMock()
-        mock_output.reasoning = "Root cause."
-        mock_output.subtasks = [
-            {"description": "Fix the bug", "file_hint": "main.py"},
-        ]
-
-        with patch("app.agents.planner.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
-            result = run_planner(make_state())
-
-        plan_item = result["plan"][0]
-        assert "id" in plan_item
-        assert "description" in plan_item
-        assert "file_hint" in plan_item
-        assert "status" in plan_item
+def test_planner_builds_plan_items():
+    fn = replies(planner=lambda S: S(reasoning="r", subtasks=[
+        {"description": "a", "file_hint": "x.py"}, {"description": "b"}]))
+    with llm.use_llm(fn):
+        out = run_planner(state())
+    assert [p["description"] for p in out["plan"]] == ["a", "b"]
+    assert out["plan"][1]["file_hint"] == "unknown"
+    assert all(len(p["id"]) == 8 for p in out["plan"])
+    assert out["status"] == "engineering"
 
 
-class TestReviewerAgent:
-    def test_reviewer_passes_good_patch(self):
-        from app.agents.reviewer import run_reviewer
-
-        mock_output = MagicMock()
-        mock_output.score = 0.85
-        mock_output.passed = True
-        mock_output.feedback = ""
-        mock_output.issues_found = []
-
-        with patch("app.agents.reviewer.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
-            state = make_state(patch="--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new")
-            result = run_reviewer(state)
-
-        assert result["review_score"] == 0.85
-        assert result["review_passed"] is True
-        assert result["status"] == "done"
-
-    def test_reviewer_fails_bad_patch(self):
-        from app.agents.reviewer import run_reviewer
-
-        mock_output = MagicMock()
-        mock_output.score = 0.4
-        mock_output.passed = False
-        mock_output.feedback = "Patch is incomplete."
-        mock_output.issues_found = ["Missing edge case"]
-
-        with patch("app.agents.reviewer.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
-            result = run_reviewer(make_state(patch="minimal patch"))
-
-        assert result["review_passed"] is False
-        assert result["status"] == "reflecting"
+def test_planner_caps_at_four_subtasks():
+    fn = replies(planner=lambda S: S(reasoning="r", subtasks=[{"description": str(i)} for i in range(9)]))
+    with llm.use_llm(fn):
+        assert len(run_planner(state())["plan"]) == 4
 
 
-class TestReflectorAgent:
-    def test_reflector_improves_patch(self):
-        from app.agents.reflector import run_reflector
-
-        mock_output = MagicMock()
-        mock_output.improved_patch = "--- a/fix.py\n+++ b/fix.py\n@@ -1 +1 @@\n+improved"
-        mock_output.changes_made = "Added missing edge case handling."
-        mock_output.new_confidence = 0.82
-
-        with patch("app.agents.reflector.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = structured_result(mock_output)
-            state = make_state(
-                patch="old patch",
-                review_score=0.4,
-                review_feedback="Incomplete",
-                reflection_count=0,
-            )
-            result = run_reflector(state)
-
-        assert result["patch"] == mock_output.improved_patch
-        assert result["confidence"] == 0.82
-        assert result["reflection_count"] == 1
-        assert result["status"] == "reviewing"
-
-    def test_reflector_stops_at_max_reflections(self):
-        from app.agents.reflector import run_reflector, MAX_REFLECTIONS
-
-        state = make_state(reflection_count=MAX_REFLECTIONS)
-        result = run_reflector(state)
-
-        assert result["status"] == "done"
-        assert result["reflection_count"] == MAX_REFLECTIONS + 1
+def test_gate_failure_overrides_a_confident_llm(wealth_repo):
+    """Even a 0.99 review cannot pass a patch that doesn't apply — and the LLM isn't even asked."""
+    called = []
+    fn = replies(reviewer=lambda S: called.append(1) or S(score=0.99, feedback="great"))
+    with llm.use_llm(fn):
+        out = run_reviewer(state(repo_path=wealth_repo, patch=HALLUCINATED_PATCH))
+    assert out["review_passed"] is False and out["review_score"] == 0.0
+    assert called == []
+    assert any("patch does not apply" in i for i in out["review_issues"])
+    assert out["history"][0]["gate_passed"] is False
 
 
-class TestGraphConditionalEdge:
-    def test_should_reflect_when_failed(self):
-        from app.agents.graph import should_reflect
-        state = make_state(review_passed=False, reflection_count=0)
-        assert should_reflect(state) == "reflect"
+def test_pass_decision_is_computed_not_trusted(wealth_repo):
+    fn = replies(reviewer=lambda S: S(score=0.5, feedback="misses edge case"))
+    with llm.use_llm(fn):
+        out = run_reviewer(state(repo_path=wealth_repo, patch=CORRECT_PATCH))
+    assert out["gate"]["passed"] is True
+    assert out["review_passed"] is False  # 0.5 < threshold
+    assert out["best_patch"] == CORRECT_PATCH and out["best_gate_passed"] is True
 
-    def test_should_be_done_when_passed(self):
-        from app.agents.graph import should_reflect
-        state = make_state(review_passed=True, reflection_count=0)
-        assert should_reflect(state) == "done"
 
-    def test_should_be_done_after_max_reflections(self):
-        from app.agents.graph import should_reflect
-        from app.agents.reflector import MAX_REFLECTIONS
-        state = make_state(review_passed=False, reflection_count=MAX_REFLECTIONS)
-        assert should_reflect(state) == "done"
+def test_worse_reflection_does_not_replace_best(wealth_repo):
+    fn = replies(reviewer=lambda S: S(score=0.6, feedback="ok-ish"))
+    with llm.use_llm(fn):
+        first = run_reviewer(state(repo_path=wealth_repo, patch=CORRECT_PATCH))
+        second = run_reviewer({**first, "patch": HALLUCINATED_PATCH, "reflection_count": 1})
+    assert second["best_patch"] == CORRECT_PATCH
+    final = finalize(second)
+    assert final["patch"] == CORRECT_PATCH and final["review_score"] == 0.6
 
-    def test_budget_kill_switch_stops_loop(self):
-        """Token budget exhaustion must terminate the loop even mid-reflection."""
-        from app.agents.graph import should_reflect
-        state = make_state(
-            review_passed=False,
-            reflection_count=0,
-            prompt_tokens=10_000_000,
-            completion_tokens=0,
-        )
-        assert should_reflect(state) == "done"
 
-    def test_tokens_accumulate_across_agents(self):
-        from app.agents.reviewer import run_reviewer
+def test_reflector_gets_gate_errors_and_cleans_output():
+    seen = {}
 
-        mock_output = MagicMock()
-        mock_output.score = 0.9
-        mock_output.passed = True
-        mock_output.feedback = ""
-        mock_output.issues_found = []
+    def fn(role, schema, system, user):
+        seen["user"] = user
+        return schema(improved_patch="```diff\n" + CORRECT_PATCH + "```", changes_made="fixed", new_confidence=0.8)
 
-        with patch("app.agents.reviewer.ChatOpenAI") as MockLLM:
-            MockLLM.return_value.with_structured_output.return_value.invoke.return_value = (
-                structured_result(mock_output, in_tokens=120, out_tokens=30)
-            )
-            result = run_reviewer(make_state(prompt_tokens=1000, completion_tokens=500))
+    with llm.use_llm(fn):
+        out = run_reflector(state(patch=HALLUCINATED_PATCH, review_issues=["git apply --check: wealth/sip.py:9"]))
+    assert "wealth/sip.py:9" in seen["user"]
+    assert out["patch"].startswith("--- a/wealth/sip.py")
+    assert out["files_modified"] == ["wealth/sip.py"]
+    assert out["reflection_count"] == 1 and out["status"] == "reviewing"
 
-        assert result["prompt_tokens"] == 1120
-        assert result["completion_tokens"] == 530
+
+def test_reflector_stops_after_max_rounds():
+    n = get_settings().max_reflections
+    out = run_reflector(state(reflection_count=n))
+    assert out["status"] == "done" and out["reflection_count"] == n + 1
+
+
+def test_should_reflect_routing():
+    n = get_settings().max_reflections
+    assert should_reflect(state(review_passed=False, reflection_count=0)) == "reflect"
+    assert should_reflect(state(review_passed=True)) == "done"
+    assert should_reflect(state(review_passed=False, reflection_count=n)) == "done"
+
+
+def test_budget_kill_switch_stops_loop(monkeypatch):
+    """Token budget exhaustion ends the loop even with reflection rounds left."""
+    monkeypatch.setattr(get_settings(), "max_tokens_per_task", 1000)
+    with llm.track_usage() as u:
+        assert should_reflect(state(review_passed=False, reflection_count=0)) == "reflect"
+        u.prompt_tokens = 1000
+        assert should_reflect(state(review_passed=False, reflection_count=0)) == "done"

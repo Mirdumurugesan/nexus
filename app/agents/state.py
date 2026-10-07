@@ -12,40 +12,75 @@ class SubTask(TypedDict):
     status: str          # pending | done | failed
 
 
-class NexusState(TypedDict):
+class Attempt(TypedDict):
+    round: int           # 0 = engineer, 1..n = reflector rounds
+    agent: str
+    gate_passed: bool
+    gate_summary: str
+    review_score: float
+    passed: bool
+
+
+class NexusState(TypedDict, total=False):
     # Input
     task_id: str
     issue_title: str
     issue_body: str
     repo_name: str
     repo_url: str
-    use_hyde: bool                  # whether retrieval uses HyDE query expansion
+    repo_path: str                  # local checkout the patch gate applies against
+    index_key: str                  # retrieval index id (defaults to repo_name)
+    use_hyde: bool
 
     # Planning
     plan: list[SubTask]
     plan_reasoning: str
 
     # RAG
-    retrieved_context: str          # formatted string of retrieved chunks
+    retrieved_context: str
+    retrieved_files: list[str]
 
-    # Patch
+    # Current patch
     patch: str
     patch_explanation: str
     files_modified: list[str]
     confidence: float
     root_cause: str
 
-    # Review
-    review_score: float             # 0.0–1.0
+    # Review (deterministic gate + LLM)
+    gate: dict
+    review_score: float             # 0.0–1.0, forced to 0 when the gate fails
     review_feedback: str
+    review_issues: list[str]
     review_passed: bool
-    review_issues_found: list[str]  # specific problems flagged by the Reviewer
 
-    # Token accounting (agent LLM calls; enforced against MAX_TOKENS_PER_TASK)
-    prompt_tokens: int
-    completion_tokens: int
+    # Best attempt so far — a reflection that makes things worse never wins
+    best_patch: str
+    best_score: float
+    best_gate_passed: bool
+    best_explanation: str
+    best_files: list[str]
 
-    # Control flow
-    reflection_count: int           # how many times we've reflected
+    # Control flow / trace
+    reflection_count: int
+    history: list[Attempt]
     error: str
     status: str                     # planning | engineering | reviewing | reflecting | done | failed
+
+
+def initial_state(**kw) -> NexusState:
+    base: NexusState = {
+        "task_id": "", "issue_title": "", "issue_body": "", "repo_name": "",
+        "repo_url": "", "repo_path": "", "index_key": "", "use_hyde": True,
+        "plan": [], "plan_reasoning": "",
+        "retrieved_context": "", "retrieved_files": [],
+        "patch": "", "patch_explanation": "", "files_modified": [],
+        "confidence": 0.0, "root_cause": "",
+        "gate": {}, "review_score": 0.0, "review_feedback": "", "review_issues": [],
+        "review_passed": False,
+        "best_patch": "", "best_score": -1.0, "best_gate_passed": False,
+        "best_explanation": "", "best_files": [],
+        "reflection_count": 0, "history": [], "error": "", "status": "planning",
+    }
+    base.update(kw)
+    return base

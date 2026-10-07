@@ -1,7 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Float, Integer, Text, Enum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, DateTime, Float, Integer, Text, Enum, Uuid
 import enum
 from app.db.database import Base
 
@@ -19,10 +18,10 @@ class TaskStatus(str, enum.Enum):
 class Task(Base):
     __tablename__ = "tasks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Creator of the task. Nullable: webhook-created tasks have no owner,
     # and pre-existing rows keep NULL (backward compatible).
-    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    user_id = Column(Uuid(as_uuid=True), nullable=True, index=True)
     github_issue_url = Column(String(500), nullable=False)
     repo_url = Column(String(500), nullable=True)
     repo_name = Column(String(200), nullable=True)

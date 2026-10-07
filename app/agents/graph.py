@@ -1,122 +1,89 @@
 """
-NEXUS LangGraph — the multi-agent orchestration graph.
+NEXUS LangGraph — the multi-agent control loop.
 
-Flow:
-  planner → engineer → reviewer ──(pass)──→ [END]
-                           └──(fail, <2x)──→ reflector → reviewer → ...
+    planner -> engineer -> reviewer --(passed)--------------------> finalize -> END
+                              ^   |--(failed, rounds left)--> reflector
+                              |___________________________________|
+                                  |--(failed, no rounds left)--> finalize -> END
 
-This is the core of NEXUS Phase 2-4.
+`finalize` promotes the best attempt seen (ranked by gate-passed, then score),
+not simply the last one.
 """
+import asyncio
 import logging
-from langgraph.graph import StateGraph, END
-from app.core.config import get_settings
-from app.agents.state import NexusState
-from app.agents.planner import run_planner
+from langgraph.graph import END, StateGraph
+
 from app.agents.engineer import run_engineer
+from app.agents.planner import run_planner
+from app.agents.reflector import run_reflector
 from app.agents.reviewer import run_reviewer
-from app.agents.reflector import run_reflector, MAX_REFLECTIONS
+from app.agents.state import NexusState, initial_state
+from app.core import llm
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
+
+
+def budget_exhausted() -> bool:
+    usage = llm.current_usage()
+    return usage is not None and usage.total_tokens >= get_settings().max_tokens_per_task
 
 
 def should_reflect(state: NexusState) -> str:
-    """
-    Conditional edge: after reviewing, decide if we're done or need reflection.
-    Terminates on: review pass, reflection cap, or token budget exhaustion.
-    """
+    """Stop on: review pass, reflection cap, or token budget kill-switch."""
     if state.get("review_passed", False):
         return "done"
-    if state.get("reflection_count", 0) >= MAX_REFLECTIONS:
-        return "done"  # exhausted reflections, accept best result
-    total_tokens = state.get("prompt_tokens", 0) + state.get("completion_tokens", 0)
-    if total_tokens >= settings.max_tokens_per_task:
-        logger.warning(
-            "[graph] Token budget exhausted (%d >= %d). Stopping with best patch.",
-            total_tokens, settings.max_tokens_per_task,
-        )
-        return "done"  # budget kill-switch: keep best result, stop spending
+    if state.get("reflection_count", 0) >= get_settings().max_reflections:
+        return "done"
+    if budget_exhausted():
+        logger.warning("[graph] token budget exhausted; stopping with best patch")
+        return "done"
     return "reflect"
 
 
-def build_nexus_graph() -> StateGraph:
-    """Build and compile the NEXUS multi-agent LangGraph."""
-    graph = StateGraph(NexusState)
-
-    # Add nodes
-    graph.add_node("planner", run_planner)
-    graph.add_node("engineer", run_engineer)
-    graph.add_node("reviewer", run_reviewer)
-    graph.add_node("reflector", run_reflector)
-
-    # Entry point
-    graph.set_entry_point("planner")
-
-    # Edges
-    graph.add_edge("planner", "engineer")
-    graph.add_edge("engineer", "reviewer")
-    graph.add_conditional_edges(
-        "reviewer",
-        should_reflect,
-        {
-            "done": END,
-            "reflect": "reflector",
+def finalize(state: NexusState) -> NexusState:
+    if state.get("best_patch") and not state.get("review_passed"):
+        state = {
+            **state,
+            "patch": state["best_patch"],
+            "files_modified": state.get("best_files", state.get("files_modified", [])),
+            "review_score": state.get("best_score", 0.0),
         }
-    )
-    graph.add_edge("reflector", "reviewer")  # loop back to reviewer
-
-    return graph.compile()
+    return {**state, "status": "done"}
 
 
-# Singleton compiled graph
-_nexus_graph = None
+def build_nexus_graph():
+    g = StateGraph(NexusState)
+    g.add_node("planner", run_planner)
+    g.add_node("engineer", run_engineer)
+    g.add_node("reviewer", run_reviewer)
+    g.add_node("reflector", run_reflector)
+    g.add_node("finalize", finalize)
+
+    g.set_entry_point("planner")
+    g.add_edge("planner", "engineer")
+    g.add_edge("engineer", "reviewer")
+    g.add_conditional_edges("reviewer", should_reflect, {"done": "finalize", "reflect": "reflector"})
+    g.add_edge("reflector", "reviewer")
+    g.add_edge("finalize", END)
+    return g.compile()
+
+
+_graph = None
 
 
 def get_nexus_graph():
-    global _nexus_graph
-    if _nexus_graph is None:
-        _nexus_graph = build_nexus_graph()
-    return _nexus_graph
+    global _graph
+    if _graph is None:
+        _graph = build_nexus_graph()
+    return _graph
 
 
-async def run_nexus_pipeline(
-    task_id: str,
-    issue_title: str,
-    issue_body: str,
-    repo_name: str,
-    repo_url: str,
-    use_hyde: bool = True,
-) -> NexusState:
-    """
-    Run the full NEXUS multi-agent pipeline.
-    Returns the final state with patch, confidence, review score, etc.
-    """
-    initial_state: NexusState = {
-        "task_id": task_id,
-        "issue_title": issue_title,
-        "issue_body": issue_body,
-        "repo_name": repo_name,
-        "repo_url": repo_url,
-        "use_hyde": use_hyde,
-        "plan": [],
-        "plan_reasoning": "",
-        "retrieved_context": "",
-        "patch": "",
-        "patch_explanation": "",
-        "files_modified": [],
-        "confidence": 0.0,
-        "root_cause": "",
-        "review_score": 0.0,
-        "review_feedback": "",
-        "review_passed": False,
-        "review_issues_found": [],
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "reflection_count": 0,
-        "error": "",
-        "status": "planning",
-    }
+def run_graph(**inputs) -> NexusState:
+    """Synchronous run (CLI, eval, background worker thread)."""
+    return get_nexus_graph().invoke(initial_state(**inputs), {"recursion_limit": 25})
 
-    graph = get_nexus_graph()
-    final_state = await graph.ainvoke(initial_state)
-    return final_state
+
+async def run_nexus_pipeline(**inputs) -> NexusState:
+    """Async wrapper for FastAPI: run the blocking graph off the event loop."""
+    return await asyncio.to_thread(run_graph, **inputs)

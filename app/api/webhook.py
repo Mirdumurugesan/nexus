@@ -27,7 +27,6 @@ from app.db.models import Task, TaskStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/webhook", tags=["webhook"])
-settings = get_settings()
 
 # Labels that trigger NEXUS auto-fix
 TRIGGER_LABELS = {"nexus", "auto-fix", "nexus-fix", "ai-fix"}
@@ -52,6 +51,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     Triggers the NEXUS pipeline when a trigger label is added to an issue.
     """
     # Signature verification is mandatory — no secret, no webhook.
+    settings = get_settings()
     webhook_secret = settings.github_webhook_secret
     if not webhook_secret:
         raise HTTPException(
@@ -135,7 +135,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 async def webhook_health():
     return {
         "status": "ok",
-        "configured": bool(settings.github_webhook_secret),
+        "configured": bool(get_settings().github_webhook_secret),
         "trigger_labels": sorted(TRIGGER_LABELS),
         "auto_trigger_on_open": False,
     }

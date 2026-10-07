@@ -1,89 +1,65 @@
 """
-Reflector Agent — Phase 4: self-improvement loop.
-If the reviewer rejects the patch, the reflector analyzes the feedback
-and generates an improved patch. Max 2 reflection rounds.
+Reflector Agent — rewrites a rejected patch using the reviewer's feedback.
+
+The feedback is usually a *fact* from the Patch Gate ("patch does not apply at
+pricing.py:14", "SyntaxError line 22", a failing test) rather than an opinion,
+which is what makes the loop converge instead of wander.
 """
 import logging
 from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
-from app.core.config import get_settings
-from app.core.llm import unpack_structured
+
+from app.core import llm
 from app.agents.state import NexusState
+from app.core.config import get_settings
+from app.tools.patch_gate import clean_patch, files_in_patch
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
-MAX_REFLECTIONS = 2
+REFLECTOR_SYSTEM = """You are an expert software engineer repairing a rejected patch.
 
-REFLECTOR_SYSTEM = """You are an expert software engineer improving a rejected code patch.
+Address EVERY problem in the feedback. If the patch did not apply, the context
+lines did not match the file: re-read the code context (lines are prefixed with
+`  N | `, never copy the prefix) and reproduce context lines exactly.
+Return a complete, minimal unified diff."""
 
-You will receive:
-1. The original GitHub issue
-2. The rejected patch
-3. Specific reviewer feedback on what was wrong
-
-Your job: generate an improved patch that addresses ALL the reviewer's concerns.
-Be precise and minimal."""
+# Kept for backwards compatibility with imports elsewhere.
+MAX_REFLECTIONS = get_settings().max_reflections
 
 
 class ReflectorOutput(BaseModel):
     improved_patch: str = Field(description="The improved patch in unified diff format")
-    changes_made: str = Field(description="What you changed vs the previous patch and why")
-    new_confidence: float = Field(description="Your confidence in the improved patch 0.0-1.0", ge=0.0, le=1.0)
+    changes_made: str = Field(description="What changed vs the previous patch and why")
+    new_confidence: float = Field(description="Confidence in the improved patch 0.0-1.0", ge=0.0, le=1.0)
 
 
 def run_reflector(state: NexusState) -> NexusState:
-    """LangGraph node: improve the patch based on reviewer feedback."""
-    reflection_count = state.get("reflection_count", 0) + 1
-    logger.info("[reflector] Reflection round %d/%d", reflection_count, MAX_REFLECTIONS)
+    max_r = get_settings().max_reflections
+    round_no = state.get("reflection_count", 0) + 1
+    logger.info(f"[reflector] round {round_no}/{max_r}")
 
-    if reflection_count > MAX_REFLECTIONS:
-        # Give up after max reflections — use best patch we have
-        logger.info("[reflector] Max reflections reached. Using current patch.")
-        return {
-            **state,
-            "reflection_count": reflection_count,
-            "status": "done",
-        }
+    if round_no > max_r:
+        return {**state, "reflection_count": round_no, "status": "done"}
 
-    llm = ChatOpenAI(
-        model=settings.primary_llm,
-        api_key=settings.openai_api_key,
-        temperature=0.2,
-        max_retries=2,
-    ).with_structured_output(ReflectorOutput, include_raw=True)
+    issues = "\n".join(f"- {i}" for i in state.get("review_issues", [])) or "- (none listed)"
+    result: ReflectorOutput = llm.call(
+        "reflector",
+        REFLECTOR_SYSTEM,
+        f"## Issue\nTitle: {state['issue_title']}\nBody: {state['issue_body'][:1200]}\n\n"
+        f"## Rejected patch\n{state.get('patch', '')}\n\n"
+        f"## Review (score {state.get('review_score', 0):.2f})\n{state.get('review_feedback', '')}\n"
+        f"Issues:\n{issues}\n\n"
+        f"## Code context\n{state.get('retrieved_context', '')[:12000]}\n\nImproved diff:",
+        schema=ReflectorOutput,
+    )
 
-    raw_result = llm.invoke([
-        SystemMessage(content=REFLECTOR_SYSTEM),
-        HumanMessage(content=f"""
-## GitHub Issue
-Title: {state['issue_title']}
-Body: {state['issue_body'][:800]}
-
-## Previous (Rejected) Patch
-{state.get('patch', 'No patch')}
-
-## Reviewer Feedback (why it was rejected)
-Score: {state.get('review_score', 0):.2f}/1.0
-Feedback: {state.get('review_feedback', 'No feedback')}
-Issues: {', '.join(state.get('review_issues_found', []))}
-
-## Code Context (relevant files)
-{state.get('retrieved_context', '')[:3000]}
-
-Generate an improved patch:"""),
-    ])
-    result, in_tok, out_tok = unpack_structured(raw_result)
-
-    logger.info("[reflector] Improved patch generated. New confidence: %.2f", result.new_confidence)
+    patch = clean_patch(result.improved_patch)
     return {
         **state,
-        "patch": result.improved_patch,
-        "patch_explanation": state.get("patch_explanation", "") + f"\n[Reflection {reflection_count}]: {result.changes_made}",
+        "patch": patch,
+        "files_modified": files_in_patch(patch) or state.get("files_modified", []),
+        "patch_explanation": state.get("patch_explanation", "")
+        + f"\n[Reflection {round_no}]: {result.changes_made}",
         "confidence": result.new_confidence,
-        "reflection_count": reflection_count,
-        "prompt_tokens": state.get("prompt_tokens", 0) + in_tok,
-        "completion_tokens": state.get("completion_tokens", 0) + out_tok,
-        "status": "reviewing",  # go back to reviewer
+        "reflection_count": round_no,
+        "status": "reviewing",
     }

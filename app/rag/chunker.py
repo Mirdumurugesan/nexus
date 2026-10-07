@@ -3,15 +3,16 @@ AST-based code chunker using tree-sitter.
 Splits Python files into function/class-level chunks (not arbitrary text windows).
 Each chunk preserves semantic boundaries — a function is never split in half.
 """
+import logging
 import os
 import json
-import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 import tree_sitter_python as tspython
 from tree_sitter import Language, Parser
 
 logger = logging.getLogger(__name__)
+
 
 PY_LANGUAGE = Language(tspython.language())
 parser = Parser(PY_LANGUAGE)
@@ -85,7 +86,7 @@ def chunk_python_file(file_path: str, content: str, repo_root: str = "") -> list
         tree = parser.parse(source_bytes)
     except Exception:
         # Fallback: treat entire file as one chunk
-        rel_path = os.path.relpath(file_path, repo_root) if repo_root else file_path
+        rel_path = (os.path.relpath(file_path, repo_root) if repo_root else file_path).replace(os.sep, "/")
         return [CodeChunk(
             chunk_id=f"{rel_path}::module::1",
             file_path=rel_path,
@@ -97,7 +98,7 @@ def chunk_python_file(file_path: str, content: str, repo_root: str = "") -> list
             end_line=content.count("\n") + 1,
         )]
 
-    rel_path = os.path.relpath(file_path, repo_root) if repo_root else file_path
+    rel_path = (os.path.relpath(file_path, repo_root) if repo_root else file_path).replace(os.sep, "/")
     imports = _get_imports(tree, source_bytes)
 
     for node in tree.root_node.children:
@@ -212,7 +213,7 @@ def chunk_repository(repo_path: str) -> list[CodeChunk]:
                 all_chunks.extend(chunks)
 
             except Exception as e:
-                logger.warning("[chunker] Skipping %s: %s", file_path, e)
+                logger.warning(f"[chunker] Skipping {file_path}: {e}")
                 continue
 
     return all_chunks

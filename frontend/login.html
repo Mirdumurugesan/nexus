@@ -186,13 +186,11 @@ input.err { border-color: #ef4444; }
     <div class="footer-note" style="margin-top:12px">The first account created gets <span class="role-badge">admin</span> role.</div>
   </div>
 
-  <div class="footer-note">NEXUS v0.2 &mdash; <a href="/docs" target="_blank">API docs</a></div>
+  <div class="footer-note">NEXUS v0.3 &mdash; <a href="/docs" target="_blank">API docs</a></div>
 </div>
 
 <script>
-// Same-origin when served by the app; falls back to localhost when the file
-// is opened directly from disk during development.
-const API = (location.protocol === 'file:' ? 'http://127.0.0.1:8000' : location.origin) + '/api/v1';
+const API = (location.protocol.startsWith('http') ? location.origin : 'http://127.0.0.1:8000') + '/api/v1';
 
 function switchTab(tab) {
   document.getElementById('login-form').style.display = tab === 'login' ? 'block' : 'none';

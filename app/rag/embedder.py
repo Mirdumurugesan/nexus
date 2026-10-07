@@ -4,6 +4,8 @@ Uses OpenAI text-embedding-3-small for cost efficiency in Phase 1.
 Weaviate stores both the vector and the raw content for BM25 hybrid search.
 """
 import logging
+from functools import lru_cache
+
 import weaviate
 import weaviate.classes as wvc
 from openai import OpenAI
@@ -11,8 +13,14 @@ from app.core.config import get_settings
 from app.rag.chunker import CodeChunk
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
-openai_client = OpenAI(api_key=settings.openai_api_key)
+
+
+@lru_cache()
+def _openai() -> OpenAI:
+    s = get_settings()
+    if not s.openai_api_key:
+        raise RuntimeError("RETRIEVER=weaviate needs OPENAI_API_KEY for embeddings (or use RETRIEVER=local)")
+    return OpenAI(api_key=s.openai_api_key)
 
 COLLECTION_NAME = "CodeChunk"
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -20,25 +28,27 @@ EMBEDDING_DIM = 1536
 
 
 def get_weaviate_client() -> weaviate.WeaviateClient:
-    """
-    Connect to Weaviate. Supports both deployment modes:
-    - Weaviate Cloud:  https:// URL + API key  → connect_to_weaviate_cloud
-    - Local (docker-compose, anonymous http):  → connect_to_local
-    """
+    """Weaviate Cloud (https:// URL + API key) or local docker-compose (anonymous http)."""
     from urllib.parse import urlparse
     from weaviate.auth import AuthApiKey
 
-    if settings.weaviate_url.startswith("https://") and settings.weaviate_api_key:
+    s = get_settings()
+    if s.weaviate_url.startswith("https://") and s.weaviate_api_key:
         return weaviate.connect_to_weaviate_cloud(
-            cluster_url=settings.weaviate_url,
-            auth_credentials=AuthApiKey(settings.weaviate_api_key),
+            cluster_url=s.weaviate_url, auth_credentials=AuthApiKey(s.weaviate_api_key),
         )
+    parsed = urlparse(s.weaviate_url)
+    return weaviate.connect_to_local(host=parsed.hostname or "localhost", port=parsed.port or 8080)
 
-    parsed = urlparse(settings.weaviate_url)
-    return weaviate.connect_to_local(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 8080,
-    )
+
+def delete_repo_chunks(repo_name: str) -> None:
+    client = get_weaviate_client()
+    try:
+        if client.collections.exists(COLLECTION_NAME):
+            client.collections.get(COLLECTION_NAME).data.delete_many(
+                where=wvc.query.Filter.by_property("repo_name").equal(repo_name))
+    finally:
+        client.close()
 
 
 def create_collection_if_not_exists(client: weaviate.WeaviateClient):
@@ -76,12 +86,12 @@ def create_collection_if_not_exists(client: weaviate.WeaviateClient):
             bm25_k1=1.2,
         ),
     )
-    logger.info("[embedder] Created Weaviate collection: %s", COLLECTION_NAME)
+    logger.info(f"[embedder] Created Weaviate collection: {COLLECTION_NAME}")
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
     """Batch embed texts using OpenAI. Max 2048 texts per call."""
-    response = openai_client.embeddings.create(
+    response = _openai().embeddings.create(
         model=EMBEDDING_MODEL,
         input=texts,
     )
@@ -124,7 +134,7 @@ def index_chunks(chunks: list[CodeChunk], repo_name: str) -> int:
                     batch_writer.add_object(properties=obj, vector=vector)
 
             total_indexed += len(batch)
-            logger.info("[embedder] Indexed %d/%d chunks", total_indexed, len(chunks))
+            logger.info(f"[embedder] Indexed {total_indexed}/{len(chunks)} chunks")
 
         return total_indexed
 

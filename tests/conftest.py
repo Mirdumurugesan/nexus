@@ -1,59 +1,76 @@
 """
-Pytest configuration — sets up an in-memory SQLite DB for tests
-so tests don't hit the real Supabase instance, and overrides
-authentication so API tests run as a fake engineer user.
+Test setup: SQLite, no LLM keys, local retriever. Must run before `app` imports
+because settings are read at import time.
 """
-import uuid
-from datetime import datetime
+import os
+import subprocess
+import tempfile
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+_tmp = tempfile.mkdtemp(prefix="nexus-test-")
+os.environ.update({
+    "DATABASE_URL": f"sqlite:///{_tmp}/test.db",
+    "OPENAI_API_KEY": "",
+    "GROQ_API_KEY": "",
+    "GOOGLE_API_KEY": "",
+    "GITHUB_TOKEN": "",
+    "GITHUB_WEBHOOK_SECRET": "",
+    "RETRIEVER": "local",
+    "GATE_TEST_COMMAND": "",
+    "APP_ENV": "test",
+    "SECRET_KEY": "test-secret",
+})
 
-from app.db.database import Base, get_db
-from app.auth.dependencies import get_current_user
-from app.auth.models import User
-from app.main import app
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
-TEST_DATABASE_URL = "sqlite:///./test.db"
-
-test_engine = create_engine(
-    TEST_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-
-# Fake authenticated user for API tests. require_engineer / require_admin
-# resolve through get_current_user, so this single override covers them.
-TEST_USER = User(
-    id=uuid.uuid4(),
-    email="test@nexus.local",
-    username="testuser",
-    hashed_password="not-a-real-hash",
-    full_name="Test User",
-    role="engineer",
-    is_active=True,
-    created_at=datetime.utcnow(),
-)
+from app.db.database import Base, engine  # noqa: E402
+from app.main import app  # noqa: E402
 
 
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def override_get_current_user():
-    return TEST_USER
-
-
-@pytest.fixture(autouse=True, scope="session")
-def setup_test_db():
-    """Create tables in test DB once per session."""
-    Base.metadata.create_all(bind=test_engine)
-    app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[get_current_user] = override_get_current_user
+@pytest.fixture(scope="session", autouse=True)
+def _db():
+    Base.metadata.create_all(bind=engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
-    app.dependency_overrides.clear()
+    Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(scope="session")
+def client():
+    with TestClient(app) as c:
+        yield c
+
+
+def make_user(client, username: str) -> dict:
+    r = client.post("/api/v1/auth/register", json={
+        "email": f"{username}@nexus.dev", "username": username, "password": "s3cret-pass",
+    })
+    assert r.status_code == 201, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+@pytest.fixture(scope="session")
+def admin(client):
+    """The first account registered becomes admin."""
+    return make_user(client, "admin1")
+
+
+@pytest.fixture(scope="session")
+def auth(client, admin):
+    """A regular engineer."""
+    return make_user(client, "engineer1")
+
+
+@pytest.fixture(scope="session")
+def other(client, admin):
+    return make_user(client, "engineer2")
+
+
+def git(cwd, *args):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+
+@pytest.fixture()
+def wealth_repo(tmp_path):
+    """A committed copy of the demo fixture (real bug, real tests)."""
+    from app.demo import _make_repo
+    return _make_repo(str(tmp_path / "wealth-lib"))

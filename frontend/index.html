@@ -383,7 +383,7 @@ body {
 .plan-file { font-size: 11px; color: var(--text-3); font-family: var(--mono); margin-top: 2px; }
 
 /* ── Results grid ── */
-.results-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+.results-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
 .result-metric {
   background: var(--bg-3);
   border: 1px solid var(--border);
@@ -854,6 +854,14 @@ code {
               <div class="result-metric-label">Reviewer Score</div>
               <div class="result-metric-val" id="r-rev">—</div>
             </div>
+            <div class="result-metric">
+              <div class="result-metric-label">Patch Gate</div>
+              <div class="result-metric-val" id="r-gate">—</div>
+            </div>
+          </div>
+          <div id="attempts-wrap" style="display:none;margin-bottom:14px">
+            <div class="result-metric-label" style="margin-bottom:8px">Attempts</div>
+            <div class="explanation-box" id="attempts-box" style="font-family:var(--mono);font-size:12px;white-space:pre-wrap"></div>
           </div>
 
           <div id="explanation-wrap" style="display:none">
@@ -1084,14 +1092,8 @@ code {
 </div>
 
 <script>
-// Same-origin when served by the app; falls back to localhost when the file
-// is opened directly from disk during development.
-const API = (location.protocol === 'file:' ? 'http://127.0.0.1:8000' : location.origin) + '/api/v1';
-// Keep the displayed webhook URL in sync with the actual deployment host
-document.addEventListener('DOMContentLoaded', () => {
-  const el = document.getElementById('webhook-url-text');
-  if (el) el.textContent = API + '/webhook/github';
-});
+const API = (location.protocol.startsWith('http') ? location.origin : 'http://127.0.0.1:8000') + '/api/v1';
+document.addEventListener('DOMContentLoaded', () => { const w = document.getElementById('webhook-url-text'); if (w) w.textContent = API + '/webhook/github'; });
 let allTasks = [];
 let taskFilter = 'all';
 let pollingId = null;
@@ -1279,8 +1281,8 @@ function updatePipeline(task) {
       <div class="plan-item">
         <div class="plan-num">${i+1}</div>
         <div>
-          <div class="plan-desc">${s.description}</div>
-          <div class="plan-file">📁 ${s.file_hint}</div>
+          <div class="plan-desc">${esc(s.description)}</div>
+          <div class="plan-file">📁 ${esc(s.file_hint)}</div>
         </div>
       </div>`).join('');
   }
@@ -1295,6 +1297,15 @@ function updatePipeline(task) {
     const revEl = document.getElementById('r-rev');
     revEl.textContent = (rev * 100).toFixed(0) + '%';
     revEl.className = 'result-metric-val ' + scoreClass(rev);
+    const gateEl = document.getElementById('r-gate');
+    gateEl.textContent = task.review_passed ? 'Verified' : (task.gate_passed ? 'Applies' : 'Rejected');
+    gateEl.className = 'result-metric-val ' + (task.review_passed ? 'val-green' : task.gate_passed ? 'val-yellow' : 'val-red');
+    if (task.history && task.history.length) {
+      document.getElementById('attempts-wrap').style.display = 'block';
+      document.getElementById('attempts-box').textContent = task.history.map(h =>
+        `${h.passed ? '✓' : '✗'} round ${h.round} (${h.agent}) · review ${(h.review_score * 100).toFixed(0)}% · ${h.gate_summary}`
+      ).join('\n');
+    }
 
     if (task.patch_explanation) {
       document.getElementById('explanation-wrap').style.display = 'block';
@@ -1330,7 +1341,7 @@ function renderPatch(patch) {
   }).join('\n');
 }
 
-function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 function copyPatch() {
   if (currentPatch) navigator.clipboard?.writeText(currentPatch).then(() => {
@@ -1382,8 +1393,8 @@ function renderDashTasks(tasks) {
     const conf = t.confidence != null ? (t.confidence * 100).toFixed(0) + '%' : '—';
     const confColor = t.confidence != null ? (t.confidence >= 0.75 ? 'var(--green)' : t.confidence >= 0.5 ? 'var(--yellow)' : 'var(--red)') : 'var(--text-3)';
     return `<tr onclick="loadTask('${t.task_id}')">
-      <td class="td-title">${t.issue_title || t.github_issue_url}</td>
-      <td class="td-repo">${extractRepo(t.github_issue_url)}</td>
+      <td class="td-title">${esc(t.issue_title || t.github_issue_url)}</td>
+      <td class="td-repo">${esc(extractRepo(t.github_issue_url))}</td>
       <td><span class="badge badge-${t.status}">${t.status}</span></td>
       <td><span style="color:${confColor};font-size:13px;font-weight:500">${conf}</span></td>
       <td class="td-mono">${timeAgo(t.created_at)}</td>
@@ -1429,8 +1440,8 @@ function renderAllTasks(tasks) {
     const barW = conf ? Math.min(100, conf) : 0;
     const barCls = conf >= 75 ? 'score-high' : conf >= 50 ? 'score-mid' : 'score-low';
     return `<tr onclick="loadTaskDash('${t.task_id}')">
-      <td class="td-title">${t.issue_title || t.github_issue_url}</td>
-      <td class="td-repo">${extractRepo(t.github_issue_url)}</td>
+      <td class="td-title">${esc(t.issue_title || t.github_issue_url)}</td>
+      <td class="td-repo">${esc(extractRepo(t.github_issue_url))}</td>
       <td><span class="badge badge-${t.status}">${t.status}</span></td>
       <td>
         ${conf != null ? `<div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;font-weight:500;min-width:32px">${conf}%</span><div class="score-bar-wrap"><div class="score-bar ${barCls}" style="width:${barW}%"></div></div></div>` : '<span style="color:var(--text-3)">—</span>'}
@@ -1487,7 +1498,7 @@ async function loadMetrics() {
     if (mr.top_repos?.length) {
       topReposEl.innerHTML = mr.top_repos.map(r =>
         `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
-          <span style="font-family:var(--mono);font-size:12px;color:var(--text)">${r.repo}</span>
+          <span style="font-family:var(--mono);font-size:12px;color:var(--text)">${esc(r.repo)}</span>
           <span style="font-size:12px;color:var(--text-3)">${r.tasks} task${r.tasks !== 1 ? 's' : ''}</span>
         </div>`).join('');
     } else {

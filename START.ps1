@@ -1,5 +1,5 @@
 # ── NEXUS Startup Script ────────────────────────────────────────────────────
-# Run this in PowerShell from F:\nexus:
+# Run this in PowerShell from the repo root:
 #   .\START.ps1
 
 Write-Host ""
@@ -11,7 +11,7 @@ Write-Host "  ██║ ╚████║███████╗██╔╝ �
 Write-Host "  ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Multi-Agent Autonomous Software Engineering Platform" -ForegroundColor White
-Write-Host "  Phase 2-4: Planner → Engineer → Reviewer → Reflector" -ForegroundColor DarkGray
+Write-Host "  Planner → Engineer → Patch Gate + Reviewer ⇄ Reflector" -ForegroundColor DarkGray
 Write-Host ""
 
 # Activate venv
@@ -23,7 +23,7 @@ if (Test-Path ".\venv\Scripts\Activate.ps1") {
     exit 1
 }
 
-# Install/update dependencies (pinned — no ad-hoc upgrades)
+# Install/update dependencies
 Write-Host "[→] Checking dependencies..." -ForegroundColor Yellow
 pip install -r requirements.txt -q
 Write-Host "[✓] Dependencies ready" -ForegroundColor Green

@@ -3,24 +3,27 @@ JWT creation, verification, and password hashing.
 """
 from datetime import datetime, timedelta
 from typing import Optional
+import bcrypt
 from jose import jwt
-from passlib.context import CryptContext
 from app.core.config import get_settings
 
 settings = get_settings()
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 8  # 8 hours
 
 
+# bcrypt directly: passlib 1.7 is unmaintained and breaks on bcrypt>=4.1.
+# Hashes stay standard $2b$, so accounts created with passlib still verify.
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8")[:72], bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8")[:72], hashed.encode())
+    except ValueError:
+        return False
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

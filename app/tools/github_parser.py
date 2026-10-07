@@ -1,9 +1,7 @@
 import re
 from dataclasses import dataclass
-from github import Github, Auth
+from github import Auth, Github
 from app.core.config import get_settings
-
-settings = get_settings()
 
 
 @dataclass
@@ -22,8 +20,8 @@ def parse_github_issue_url(url: str) -> tuple[str, str, int]:
     Input:  https://github.com/owner/repo/issues/123
     Output: (owner, repo, 123)
     """
-    pattern = r"github\.com/([^/]+)/([^/]+)/issues/(\d+)"
-    match = re.search(pattern, url)
+    pattern = r"^https?://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?$"
+    match = re.match(pattern, (url or "").strip())
     if not match:
         raise ValueError(f"Invalid GitHub issue URL: {url}")
     owner, repo, issue_num = match.groups()
@@ -32,7 +30,9 @@ def parse_github_issue_url(url: str) -> tuple[str, str, int]:
 
 def fetch_github_issue(issue_url: str) -> ParsedIssue:
     """Fetch full issue details from GitHub API."""
-    g = Github(auth=Auth.Token(settings.github_token))
+    token = get_settings().github_token
+    # Anonymous works for public repos (60 req/h); a token raises that to 5000/h.
+    g = Github(auth=Auth.Token(token)) if token else Github()
 
     owner, repo_name, issue_number = parse_github_issue_url(issue_url)
     repo = g.get_repo(f"{owner}/{repo_name}")

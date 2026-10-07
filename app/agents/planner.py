@@ -1,18 +1,15 @@
 """
-Planner Agent — decomposes a GitHub issue into ordered subtasks.
-Uses the configured primary LLM with structured output to produce a deterministic plan.
+Planner Agent — decomposes a GitHub issue into 2-4 ordered subtasks.
 """
-import uuid
 import logging
+import uuid
+
 from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
-from app.core.config import get_settings
-from app.core.llm import unpack_structured
+
+from app.core import llm
 from app.agents.state import NexusState, SubTask
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 PLANNER_SYSTEM = """You are a senior software engineering planner.
 Given a GitHub issue, decompose the fix into 2-4 concrete subtasks.
@@ -20,54 +17,39 @@ Given a GitHub issue, decompose the fix into 2-4 concrete subtasks.
 Each subtask must:
 - Be a single, atomic code change
 - Reference the likely file to modify
-- Be ordered by dependency (do task 1 before task 2)
+- Be ordered by dependency (do task 1 before task 2)"""
 
-Return ONLY a JSON object — no extra text."""
+
+class PlanItem(BaseModel):
+    description: str = Field(description="One atomic code change")
+    file_hint: str = Field(default="unknown", description="Most likely file path to modify")
 
 
 class PlannerOutput(BaseModel):
     reasoning: str = Field(description="One sentence: what is the core problem?")
-    subtasks: list[dict] = Field(description="List of {description, file_hint} dicts, 2-4 items")
+    subtasks: list[PlanItem] = Field(description="2-4 ordered subtasks")
 
 
 def run_planner(state: NexusState) -> NexusState:
-    """LangGraph node: plan the fix for the issue."""
-    logger.info("[planner] Planning fix for: %s", state["issue_title"])
+    logger.info(f"[planner] Planning fix for: {state['issue_title']}")
+    result: PlannerOutput = llm.call(
+        "planner",
+        PLANNER_SYSTEM,
+        f"Issue Title: {state['issue_title']}\n"
+        f"Issue Body: {state['issue_body'][:1500]}\n"
+        f"Repository: {state['repo_name']}\n\nPlan the fix:",
+        schema=PlannerOutput,
+    )
 
-    llm = ChatOpenAI(
-        model=settings.primary_llm,
-        api_key=settings.openai_api_key,
-        temperature=0.2,
-        max_retries=2,
-    ).with_structured_output(PlannerOutput, include_raw=True)
-
-    raw_result = llm.invoke([
-        SystemMessage(content=PLANNER_SYSTEM),
-        HumanMessage(content=f"""
-Issue Title: {state['issue_title']}
-Issue Body: {state['issue_body'][:1000]}
-Repository: {state['repo_name']}
-
-Plan the fix:"""),
-    ])
-    result, in_tok, out_tok = unpack_structured(raw_result)
-
-    subtasks: list[SubTask] = [
-        SubTask(
-            id=str(uuid.uuid4())[:8],
-            description=st["description"],
-            file_hint=st.get("file_hint", "unknown"),
+    plan: list[SubTask] = []
+    for st in result.subtasks[:4]:
+        item = st if isinstance(st, PlanItem) else PlanItem(**st)
+        plan.append(SubTask(
+            id=uuid.uuid4().hex[:8],
+            description=item.description,
+            file_hint=item.file_hint or "unknown",
             status="pending",
-        )
-        for st in result.subtasks
-    ]
+        ))
 
-    logger.info("[planner] Created %d subtasks", len(subtasks))
-    return {
-        **state,
-        "plan": subtasks,
-        "plan_reasoning": result.reasoning,
-        "prompt_tokens": state.get("prompt_tokens", 0) + in_tok,
-        "completion_tokens": state.get("completion_tokens", 0) + out_tok,
-        "status": "engineering",
-    }
+    logger.info(f"[planner] {len(plan)} subtasks")
+    return {**state, "plan": plan, "plan_reasoning": result.reasoning, "status": "engineering"}

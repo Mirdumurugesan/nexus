@@ -3,35 +3,23 @@ FastAPI routes for task management.
 POST /tasks  → submit a GitHub issue for processing
 GET  /tasks/{id} → poll task status + results
 """
+import logging
 import json
 import uuid
-import asyncio
-import logging
-import threading
-from collections import defaultdict
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from app.core.config import get_settings
-from app.core.llm import estimate_cost_usd
 from app.db.database import get_db, SessionLocal
 from app.db.models import Task, TaskStatus
 from app.auth.dependencies import get_current_user, require_engineer
 from app.auth.models import User
 from app.tools.github_parser import fetch_github_issue, parse_github_issue_url
-from app.rag.chunker import chunk_repository
-from app.rag.embedder import index_chunks
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
-router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
-# Serializes clone+index per repository so concurrent tasks on the same repo
-# cannot delete each other's chunks mid-flight (single-process scope, which
-# matches the BackgroundTasks execution model).
-_repo_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
 
 # ── Request / Response schemas ────────────────────────────────────────────────
@@ -39,6 +27,19 @@ _repo_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 class CreateTaskRequest(BaseModel):
     github_issue_url: str
     use_hyde: bool = True
+
+    @field_validator("github_issue_url")
+    @classmethod
+    def must_be_issue_url(cls, v: str) -> str:
+        parse_github_issue_url(v)  # raises ValueError -> 422
+        return v.strip()
+
+
+class PlanStep(BaseModel):
+    id: str
+    description: str
+    file_hint: str
+    status: str
 
 
 class TaskResponse(BaseModel):
@@ -53,6 +54,9 @@ class TaskResponse(BaseModel):
     confidence: float | None
     review_score: float | None
     review_passed: bool | None
+    gate_passed: bool | None = None
+    reflections: int | None = None
+    history: list[dict] | None = None
     plan: list[dict] | None
     cost_usd: float | None
     error_message: str | None
@@ -62,41 +66,36 @@ class TaskResponse(BaseModel):
 
 # ── Background task pipeline ──────────────────────────────────────────────────
 
-def run_pipeline(task_id: str, use_hyde: bool):
-    """
-    Full NEXUS pipeline (Phase 1-4):
-    1. Parse GitHub issue
-    2. Clone + index repository (RAG)
-    3. LangGraph multi-agent: Planner → Engineer → Reviewer → Reflector
+def _parse_task_id(task_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(task_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Task not found")
 
-    NOTE: deliberately a *sync* function. Starlette runs sync background tasks
-    in a worker thread, so the blocking work here (git clone, chunking,
-    embedding, DB commits) never blocks the API event loop. The async agent
-    graph is driven via asyncio.run() inside this worker thread.
 
-    Creates its own DB session — background tasks outlive the request session.
+def run_pipeline(task_id: str, use_hyde: bool = True):
     """
-    import tempfile
-    import git
-    from app.agents.graph import run_nexus_pipeline
+    Background worker: fetch issue -> solve_issue() -> persist result.
+    Sync on purpose: FastAPI runs sync background tasks in a thread pool, so a
+    long agent run never blocks the event loop. Uses its own DB session.
+    """
+    from app.pipeline import solve_issue
 
     db = SessionLocal()
-    task = db.query(Task).filter(Task.id == task_id).first()
+    task = db.query(Task).filter(Task.id == _parse_task_id(task_id)).first()
     if not task:
         db.close()
         return
 
-    def update_status(status: TaskStatus, step: str):
+    def step(status: TaskStatus, text: str):
         task.status = status
-        task.current_step = step
+        task.current_step = text
         task.updated_at = datetime.utcnow()
         db.commit()
 
     try:
-        # ── Step 1: Parse issue ──────────────────────────────────────
-        update_status(TaskStatus.CLONING, "Fetching GitHub issue")
+        step(TaskStatus.CLONING, "Fetching GitHub issue")
         issue = fetch_github_issue(task.github_issue_url)
-
         task.repo_url = issue.repo_url
         task.repo_name = issue.repo_full_name
         task.issue_number = issue.issue_number
@@ -104,74 +103,51 @@ def run_pipeline(task_id: str, use_hyde: bool):
         task.issue_body = issue.issue_body
         db.commit()
 
-        # ── Step 2: Clone + chunk + index (serialized per repo) ─────
-        update_status(TaskStatus.INDEXING, "Cloning and indexing repository")
-
-        with _repo_locks[issue.repo_full_name]:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                git.Repo.clone_from(issue.repo_url, tmpdir, depth=1)
-                chunks = chunk_repository(tmpdir)
-                logger.info("[pipeline] Chunked %d code chunks", len(chunks))
-
-                indexed = index_chunks(chunks, repo_name=issue.repo_full_name)
-                logger.info("[pipeline] Indexed %d chunks into Weaviate", indexed)
-
-        # ── Step 3: Multi-agent pipeline (LangGraph) ────────────────
-        update_status(TaskStatus.RETRIEVING, "Planner Agent: decomposing issue")
-
-        final_state = asyncio.run(run_nexus_pipeline(
-            task_id=str(task.id),
+        step(TaskStatus.GENERATING, "Indexing repo + running Planner → Engineer → Reviewer ⇄ Reflector")
+        result = solve_issue(
             issue_title=issue.issue_title,
             issue_body=issue.issue_body,
             repo_name=issue.repo_full_name,
             repo_url=issue.repo_url,
             use_hyde=use_hyde,
-        ))
-
-        # ── Save results ─────────────────────────────────────────────
-        task.generated_patch = final_state.get("patch", "")
-        task.patch_explanation = final_state.get("patch_explanation", "")
-        task.relevant_files = json.dumps(final_state.get("files_modified", []))
-
-        meta = {
-            "plan": final_state.get("plan", []),
-            "review_score": final_state.get("review_score", 0.0),
-            "review_passed": final_state.get("review_passed", False),
-            "review_feedback": final_state.get("review_feedback", ""),
-            "confidence": final_state.get("confidence", 0.0),
-            "reflection_count": final_state.get("reflection_count", 0),
-        }
-        task.error_message = None  # clear any old error
-        task.meta_json = json.dumps(meta)
-
-        # Token accounting + cost estimate (agent LLM calls; the HyDE
-        # mini-model call is not counted — negligible cost)
-        task.prompt_tokens = final_state.get("prompt_tokens", 0)
-        task.completion_tokens = final_state.get("completion_tokens", 0)
-        task.estimated_cost_usd = estimate_cost_usd(
-            settings.primary_llm, task.prompt_tokens, task.completion_tokens
+            task_id=str(task.id),
         )
 
+        task.generated_patch = result.patch
+        task.patch_explanation = result.patch_explanation
+        task.relevant_files = json.dumps(result.files_modified)
+        task.meta_json = json.dumps({
+            "plan": result.plan,
+            "review_score": result.review_score,
+            "review_passed": result.passed,
+            "gate_passed": result.gate_passed,
+            "gate": result.gate,
+            "confidence": result.confidence,
+            "reflection_count": result.reflections,
+            "history": result.history,
+            "retrieved_files": result.retrieved_files,
+            "llm_calls": result.llm_calls,
+            "seconds": result.seconds,
+            "budget_exhausted": result.budget_exhausted,
+        })
+        task.prompt_tokens = result.prompt_tokens
+        task.completion_tokens = result.completion_tokens
+        task.estimated_cost_usd = result.cost_usd
+        task.error_message = None
         task.status = TaskStatus.COMPLETED
-        task.current_step = "Done"
+        task.current_step = "Done — patch verified" if result.passed else "Done — best attempt (not verified)"
         task.completed_at = datetime.utcnow()
         db.commit()
-
-        logger.info(
-            "[pipeline] Task %s COMPLETED | confidence=%.2f review=%.2f passed=%s "
-            "reflections=%d tokens=%d cost=$%.4f",
-            task_id, meta["confidence"], meta["review_score"], meta["review_passed"],
-            meta["reflection_count"], task.prompt_tokens + task.completion_tokens,
-            task.estimated_cost_usd,
-        )
-
-    except Exception as e:
+        logger.info(f"[pipeline] {task_id} done: passed={result.passed} gate={result.gate_passed} "
+              f"score={result.review_score:.2f} reflections={result.reflections} {result.seconds}s")
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
         task.status = TaskStatus.FAILED
-        task.error_message = str(e)
+        task.error_message = f"{type(e).__name__}: {e}"[:2000]
         task.current_step = "Failed"
         task.updated_at = datetime.utcnow()
         db.commit()
-        logger.exception("[pipeline] Task %s FAILED: %s", task_id, e)
     finally:
         db.close()
 
@@ -186,15 +162,6 @@ async def create_task(
     current_user: User = Depends(require_engineer),
 ):
     """Submit a GitHub issue for autonomous patch generation. Requires engineer role."""
-    # Reject malformed URLs up front instead of queueing a doomed task
-    try:
-        parse_github_issue_url(request.github_issue_url)
-    except ValueError:
-        raise HTTPException(
-            status_code=422,
-            detail="Invalid GitHub issue URL (expected https://github.com/<owner>/<repo>/issues/<n>)",
-        )
-
     task = Task(
         github_issue_url=request.github_issue_url,
         status=TaskStatus.QUEUED,
@@ -215,7 +182,7 @@ async def create_task(
 
 
 def _visible_tasks(db: Session, user: User):
-    """Admins see all tasks; other users see their own + webhook tasks (no owner)."""
+    """Admins see every task; others see their own plus webhook tasks (no owner)."""
     q = db.query(Task)
     if user.role != "admin":
         q = q.filter((Task.user_id == user.id) | (Task.user_id.is_(None)))
@@ -224,12 +191,12 @@ def _visible_tasks(db: Session, user: User):
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
 async def get_task(
-    task_id: uuid.UUID,
+    task_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Poll task status and retrieve results."""
-    task = _visible_tasks(db, current_user).filter(Task.id == task_id).first()
+    task = _visible_tasks(db, current_user).filter(Task.id == _parse_task_id(task_id)).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return _task_to_response(task)
@@ -237,23 +204,27 @@ async def get_task(
 
 @router.get("/tasks", response_model=list[TaskResponse])
 async def list_tasks(
-    limit: int = 20,
+    limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List recent tasks (scoped to the requesting user unless admin)."""
-    tasks = (
-        _visible_tasks(db, current_user)
-        .order_by(Task.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    """List recent tasks."""
+    tasks = _visible_tasks(db, current_user).order_by(Task.created_at.desc()).limit(limit).all()
     return [_task_to_response(t) for t in tasks]
 
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "phase": "2-4", "version": "0.2.0"}
+    from app.core import llm
+    from app.core.config import get_settings
+    s = get_settings()
+    return {
+        "status": "ok",
+        "version": "0.3.0",
+        "llm_configured": llm.available(),
+        "retriever": s.retriever,
+        "gate_tests": bool(s.gate_test_command),
+    }
 
 
 def _task_to_response(task: Task) -> TaskResponse:
@@ -262,6 +233,7 @@ def _task_to_response(task: Task) -> TaskResponse:
     review_score = None
     review_passed = None
     confidence = None
+    meta: dict = {}
 
     if task.relevant_files:
         try:
@@ -269,7 +241,7 @@ def _task_to_response(task: Task) -> TaskResponse:
         except Exception:
             pass
 
-    if task.meta_json:
+    if hasattr(task, "meta_json") and task.meta_json:
         try:
             meta = json.loads(task.meta_json)
             plan = meta.get("plan")
@@ -291,6 +263,9 @@ def _task_to_response(task: Task) -> TaskResponse:
         confidence=confidence,
         review_score=review_score,
         review_passed=review_passed,
+        gate_passed=meta.get("gate_passed"),
+        reflections=meta.get("reflection_count"),
+        history=meta.get("history"),
         plan=plan,
         cost_usd=task.estimated_cost_usd,
         error_message=task.error_message,

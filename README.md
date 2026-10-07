@@ -1,282 +1,172 @@
-# NEXUS — Multi-Agent Autonomous Software Engineering Platform
+# NEXUS
 
-> *Automatically resolves GitHub issues using a self-improving multi-agent pipeline.*
+**Give it a GitHub issue and it returns a patch. The patch is only marked verified after it applies cleanly, compiles and passes the repo's tests.**
 
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green.svg)](https://fastapi.tiangolo.com)
-[![LangGraph](https://img.shields.io/badge/LangGraph-0.2.28-purple.svg)](https://langchain-ai.github.io/langgraph/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![ci](https://github.com/Mirdumurugesan/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Mirdumurugesan/nexus/actions/workflows/ci.yml)
+![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
+![tests](https://img.shields.io/badge/tests-70%20passing-brightgreen)
+
+NEXUS is a multi-agent pipeline built with LangGraph. A **Planner** breaks the issue into subtasks, an **Engineer** writes a diff from code it retrieves, a **Reviewer** decides whether the diff ships, and a **Reflector** repairs rejected diffs.
+
+The usual weak point in these systems is review: one LLM asks another whether a patch looks right. NEXUS doesn't let a model approve a patch on its own. Before any model reviews a diff, a deterministic **patch gate** runs it against the real checkout.
+
+```
+$ python -m app.cli demo          # no API keys, ~2 seconds
+
+  ✗ round 0 (engineer):  gate FAILED: git apply --check: error: patch failed: wealth/sip.py:9
+  ✓ round 1 (reflector): gate OK: applies cleanly, 1 file(s) compile, tests pass · review 0.93
+  result   VERIFIED · score 0.93 · 1 reflection(s) · 5 LLM calls · 1.3s
+```
+
+![NEXUS dashboard showing the attempt history and a verified patch](docs/dashboard.png)
 
 ---
 
-## What is NEXUS?
+## How it works
 
-NEXUS is an autonomous software engineering system that takes a GitHub issue URL and produces a code patch — with no human in the loop.
+```mermaid
+flowchart LR
+    I[GitHub issue] --> C[Clone + AST chunk<br/>tree-sitter]
+    C --> R[Hybrid retrieval<br/>BM25 · symbols · HyDE → RRF]
+    R --> P[Planner]
+    P --> E[Engineer]
+    E --> G{Patch gate<br/>git apply · compile · tests}
+    G -- fails --> F[Reflector]
+    G -- passes --> V[LLM reviewer]
+    V -- score below 0.7 --> F
+    F --> G
+    V -- score 0.7 or above --> D[Finalize: best attempt]
+    F -. out of rounds .-> D
+```
 
-It is inspired by systems like [Devin](https://cognition.ai), [SWE-agent](https://swe-agent.com), and [OpenHands](https://github.com/All-Hands-AI/OpenHands), and is evaluated on the [SWE-bench](https://www.swebench.com) benchmark.
+| Stage | What it does | Why it's built this way |
+|---|---|---|
+| **Chunking** | tree-sitter splits Python into functions, classes and methods | A function is never cut in half, so the LLM always sees whole units |
+| **Retrieval** | Three rankings fused with Reciprocal Rank Fusion (k=60): BM25 on code, BM25 on *symbols* (path + name), BM25 on HyDE code | Issues often name the function that's broken, and the symbol ranking lets that exact name win. HyDE turns prose into code-shaped queries |
+| **Context** | Retrieved code is shown with real line numbers (`  12 \| ...`) | Hunks then land on the right lines. The prompt forbids copying the prefixes |
+| **Patch gate** | `git apply --check` → apply → `compile()` every touched `.py` → optional test command → **always restore the checkout** | These checks are facts, not opinions. A diff that doesn't apply gets score 0, and the LLM reviewer is never called |
+| **Reviewer** | Runs only on gate-passing diffs. `passed = gate_ok and score ≥ 0.7`, **computed in code** | The model's own "passed: true" is never trusted |
+| **Reflector** | Gets git's or the compiler's exact error, not "seems incomplete" | Concrete errors make the loop converge instead of wander |
+| **Finalize** | Returns the **best** attempt, ranked by (gate passed, score) | A reflection round that makes the patch worse can't overwrite a better earlier one |
+| **LLM layer** | One `llm.call(role, ...)` over a provider chain from config (`PRIMARY_LLM=groq/openai/gpt-oss-120b` → `FALLBACK_LLM=google/gemini-3.6-flash`, OpenAI optional). Missing keys are skipped, tokens and cost are counted | Moving providers is a config change. Tests swap in a scripted model by role without patching anything |
+| **Budget** | `MAX_TOKENS_PER_TASK` is a hard kill switch: once spent, the loop stops and returns its best attempt | A stuck reflection loop can't burn a quota |
 
-**Input:** `https://github.com/psf/requests/issues/7443`
-**Output:** A unified diff patch that fixes the bug
+### The demo bug
+
+`demo/fixture` is a small wealth-planning library with a real bug. `future_value()` compounds the annual rate every month, so a ₹10,000/month SIP at 12% for 10 years shows about ₹75 lakh instead of ₹23.2 lakh. Two of its tests fail.
+
+In the default demo the LLM replies are scripted (`--live` uses real models). The first engineer diff makes up context lines, which is the most common way LLM diffs fail. Everything else is real: the git checkout, retrieval, the LangGraph loop, `git apply`, the compile check and the pytest run.
 
 ---
 
-## Architecture
-
-```
-GitHub Issue URL
-      │
-      ▼
-┌─────────────────────────────────────────────────┐
-│                 NEXUS Pipeline                  │
-│                                                 │
-│  Clone Repo ──▶ AST Chunker ──▶ Hybrid RAG     │
-│  (GitPython)   (tree-sitter)   (BM25+Vec+HyDE) │
-│                                      │          │
-│                                      ▼          │
-│         LangGraph Agent Graph                   │
-│                                                 │
-│  Planner ──▶ Engineer ──▶ Reviewer             │
-│                               │    │            │
-│                          pass │    │ fail       │
-│                               │    ▼            │
-│                               │  Reflector      │
-│                               │  (loop ≤ 2x)   │
-│                               ▼                 │
-└───────────────────────────────────────────────  ┘
-                               │
-                               ▼
-                      Unified Diff Patch
-```
-
-### Tech Stack
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **API** | FastAPI + Uvicorn | Async REST API, webhook receiver |
-| **Agents** | LangGraph 0.2 | Multi-agent state machine orchestration |
-| **LLM** | GPT-4o + Groq GPT-OSS-120B | Patch generation with fallback |
-| **RAG** | Weaviate Cloud | Hybrid BM25 + vector search |
-| **Embeddings** | OpenAI text-embedding-3-small | Code chunk embeddings |
-| **Chunking** | tree-sitter | AST-based Python code chunking |
-| **DB** | PostgreSQL (Supabase) | Task persistence |
-| **Query Expansion** | HyDE | Hypothetical Document Embeddings |
-
----
-
-## Agents
-
-### 1. Planner Agent
-Decomposes the GitHub issue into 2-4 ordered subtasks with file hints.
-Uses GPT-4o structured output (Pydantic schema enforcement).
-
-### 2. Engineer Agent
-Generates the actual code patch using retrieved context from Hybrid RAG.
-GPT-4o primary, Groq GPT-OSS-120B fallback.
-
-### 3. Reviewer Agent
-Scores the patch on correctness, completeness, safety, and style (0.0–1.0).
-Passes patches with score >= 0.7.
-
-### 4. Reflector Agent
-If the reviewer rejects the patch, reads the feedback and generates an improved version.
-Loops back to the reviewer. Maximum 2 reflection rounds.
-
----
-
-## RAG Pipeline
-
-**Reciprocal Rank Fusion (RRF)** combines BM25 and vector rankings:
-
-```
-score(d) = 1/(k + rank_bm25) + 1/(k + rank_vector)    where k=60
-```
-
-**HyDE**: Instead of embedding the raw issue text, we ask GPT-4o-mini to
-write a hypothetical fix, then embed that — much closer to actual code in
-embedding space.
-
----
-
-## Quick Start
-
-### Prerequisites
-- Python 3.11+, OpenAI API key, Groq API key, GitHub Token
-- Supabase account (free), Weaviate Cloud account (free)
-- Or run Postgres + Weaviate locally: `docker compose up -d`
-
-### Installation
-
-```powershell
-git clone https://github.com/YOUR_USERNAME/nexus.git
-cd nexus
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-### Configuration
-
-Create `.env` from the template and fill in your keys:
-
-```env
-OPENAI_API_KEY=sk-...
-GROQ_API_KEY=gsk_...
-GITHUB_TOKEN=ghp_...
-DATABASE_URL=postgresql://...
-WEAVIATE_URL=https://....weaviate.cloud   # or http://localhost:8080 for local
-WEAVIATE_API_KEY=...                      # empty for local Weaviate
-SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
-```
-
-See `.env.example` for the full list (CORS origins, token budget, model choices).
-With `APP_ENV=production`, startup fails unless `SECRET_KEY` is set.
-
-### Run
-
-```powershell
-uvicorn app.main:app --reload
-```
-
-Open `http://127.0.0.1:8000/` — the dashboard is served by the app
-(create an account at `/login.html`; the first account gets the admin role).
-API docs: `http://127.0.0.1:8000/docs`.
-
-### Submit a Task
-
-All task endpoints require a JWT (engineer role):
+## Run it
 
 ```bash
-TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "you", "password": "..."}' | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+git clone https://github.com/Mirdumurugesan/nexus && cd nexus
+python -m venv venv && source venv/bin/activate      # Windows: .\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 
-curl -X POST http://127.0.0.1:8000/api/v1/tasks \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"github_issue_url": "https://github.com/psf/requests/issues/7443"}'
+python -m pytest                     # 70 tests, offline, no keys
+python -m app.cli demo               # scripted LLM, real gate
 ```
 
-Every task tracks its token usage and estimated cost, and the agent loop
-stops automatically when `MAX_TOKENS_PER_TASK` is exhausted.
+With a key in `.env` (`cp .env.example .env`, then set `GROQ_API_KEY` and/or `GOOGLE_API_KEY`; both have free tiers):
+
+```bash
+python -m app.cli demo --live                                          # real models on the demo bug
+python -m app.cli solve https://github.com/<owner>/<repo>/issues/<n> --out fix.diff
+uvicorn app.main:app --reload                                          # dashboard at http://127.0.0.1:8000
+```
+
+Nothing else is required. The defaults are SQLite and the in-memory retriever. Postgres/Supabase and Weaviate are opt-in through `DATABASE_URL` and `RETRIEVER=weaviate`. `docker compose up -d postgres weaviate` starts both locally.
+
+### Deploy
+
+`render.yaml` is a Render Blueprint (New → Blueprint → this repo). It builds the `Dockerfile`, generates `SECRET_KEY` and `GITHUB_WEBHOOK_SECRET`, and asks for `DATABASE_URL` plus the Groq and Gemini keys. In production, startup fails if `SECRET_KEY` is still the default.
+
+### GitHub App
+
+Point an app's webhook at `/api/v1/webhook/github` and subscribe to **Issues**. NEXUS starts only when a collaborator adds the `nexus`/`auto-fix` label, never on every opened issue, because each run costs LLM credits. The endpoint stays disabled (503) until `GITHUB_WEBHOOK_SECRET` is set, and every call must carry a valid HMAC-SHA256 signature.
 
 ---
 
-## GitHub App Integration
+## Evaluating on SWE-bench Lite
 
-NEXUS auto-triggers on any repository via GitHub webhooks.
-
-1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New**
-2. Set webhook URL: `https://your-domain/api/v1/webhook/github`
-3. Set a webhook secret and put it in `GITHUB_WEBHOOK_SECRET` — **required**;
-   the endpoint returns 503 until it is configured, and every request is
-   HMAC-verified
-4. Subscribe to **Issues** events
-5. NEXUS triggers when an issue is labeled `nexus` (or `auto-fix`,
-   `nexus-fix`, `ai-fix`). Triggering on every opened issue is deliberately
-   not supported — each run costs LLM money, so runs require an explicit
-   label from a collaborator.
-
----
-
-## SWE-bench Evaluation
-
-```powershell
+```bash
 pip install datasets
-$env:NEXUS_API_TOKEN = "<jwt from /api/v1/auth/login>"
-python evals/swebench_eval.py --limit 10 --output evals/results.json
+python evals/swebench_eval.py --limit 25
 ```
 
----
+Each instance is checked out at its exact `base_commit`, using a cached clone per repo. The script reports:
 
-## Tests
+| Metric | Meaning |
+|---|---|
+| `gate_pass_pct` | Final patch applies at `base_commit` and compiles |
+| `file_hit_pct` | Patch edits a file the gold patch edits (localisation) |
+| `retrieval_hit_pct` | A gold file was in the retrieved context |
+| `verified_pct` | Passed gate + LLM review |
 
-```powershell
-pytest tests/ -v
+It **does not** claim "% resolved". That needs each repo's own test environment. Instead it writes `evals/out/predictions.jsonl` in the official format, ready for the SWE-bench harness:
+
+```bash
+python -m swebench.harness.run_evaluation --dataset_name princeton-nlp/SWE-bench_Lite \
+  --predictions_path evals/out/predictions.jsonl --max_workers 4 --run_id nexus
 ```
 
----
-
-## API Reference
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/tasks` | Submit a GitHub issue |
-| `GET` | `/api/v1/tasks/{id}` | Poll task status + results |
-| `GET` | `/api/v1/tasks` | List recent tasks |
-| `GET` | `/api/v1/metrics` | Platform-wide statistics |
-| `GET` | `/api/v1/metrics/daily` | Daily task breakdown |
-| `POST` | `/api/v1/webhook/github` | GitHub App webhook receiver |
-| `GET` | `/api/v1/health` | Health check |
+<!-- RESULTS: paste the summary from evals/out/results.json here after a run, with model + date. -->
 
 ---
 
-## Project Structure
+## API
+
+| Method | Endpoint | Auth |
+|---|---|---|
+| `POST` | `/api/v1/auth/register` · `/login` | — |
+| `POST` | `/api/v1/tasks` — submit an issue URL (validated, 202) | engineer |
+| `GET` | `/api/v1/tasks/{id}` — status, plan, patch, gate verdict, attempt history | owner / admin |
+| `GET` | `/api/v1/tasks?limit=` — your tasks (admins see all) | user |
+| `GET` | `/api/v1/metrics` · `/metrics/daily` | user |
+| `POST` | `/api/v1/webhook/github` | HMAC signature |
+| `GET` | `/api/v1/health` — reports LLM / retriever / gate configuration | — |
+
+Agent runs happen in a worker thread, so a 2-minute run never blocks the event loop. Tasks still in flight when the server restarts are marked failed at boot instead of hanging forever. Logins are throttled (5 failures per minute), and the first account becomes admin.
+
+## Layout
 
 ```
-nexus/
-├── app/
-│   ├── agents/          # LangGraph multi-agent system
-│   │   ├── state.py     # Shared agent state (TypedDict)
-│   │   ├── planner.py   # Planner Agent
-│   │   ├── engineer.py  # Engineer Agent
-│   │   ├── reviewer.py  # Reviewer Agent
-│   │   ├── reflector.py # Reflector Agent (self-healing loop)
-│   │   └── graph.py     # LangGraph orchestration
-│   ├── rag/             # Retrieval-Augmented Generation
-│   │   ├── chunker.py   # AST-based code chunking (tree-sitter)
-│   │   ├── embedder.py  # OpenAI embeddings + Weaviate indexing
-│   │   └── retriever.py # Hybrid BM25 + vector + RRF + HyDE
-│   ├── api/
-│   │   ├── tasks.py     # Task CRUD + pipeline trigger
-│   │   ├── webhook.py   # GitHub App webhook handler
-│   │   └── metrics.py   # Analytics API
-│   ├── auth/            # JWT auth (register/login, roles, throttling)
-│   ├── core/
-│   │   ├── config.py    # Pydantic settings (env-driven)
-│   │   └── llm.py       # Token accounting + cost estimation helpers
-│   ├── db/
-│   │   ├── models.py    # SQLAlchemy Task model
-│   │   └── database.py  # Supabase connection
-│   └── main.py
-├── evals/
-│   └── swebench_eval.py # SWE-bench evaluation script
-├── frontend/
-│   ├── index.html       # Real-time dashboard (served at /)
-│   └── login.html       # Login / register page
-├── tests/               # Pytest test suite
-├── Dockerfile           # Single-container deploy (Render/Railway/Fly)
-├── docker-compose.yml   # Local Postgres + Weaviate + Redis
-└── requirements.txt
+app/
+  agents/      planner · engineer · reviewer (gate + LLM) · reflector · graph (LangGraph) · state
+  tools/       patch_gate.py — git apply / compile / tests, always restores the checkout
+               github_parser.py
+  rag/         chunker (tree-sitter) · local_index (BM25 + symbols + HyDE, RRF) · retriever · embedder (Weaviate)
+  core/llm.py  provider chain (groq · google · openai), role-tagged calls, tokens + cost, test override
+  pipeline.py  solve_issue(): one code path for API, CLI and eval
+  cli.py       demo · solve
+  api/ auth/ db/
+demo/fixture/  the buggy wealth library used by the demo and the tests
+evals/         SWE-bench Lite runner → harness-format predictions
+tests/         70 tests: gate against real git, retrieval, fallback chain, budget, agents, end-to-end loop, API, eval
 ```
 
----
+## Testing
 
-## Deployment Notes
+`python -m pytest` runs 70 tests in about 15 seconds with no network or keys, on Python 3.11 to 3.13 in CI. The tests check behaviour, not just mocks:
 
-- **Render/Railway**: build from the `Dockerfile` (or `pip install -r
-  requirements.txt` + `uvicorn app.main:app --host 0.0.0.0 --port $PORT`).
-  Set all env vars from `.env.example`; use `APP_ENV=production`.
-- **Model fallback**: the Engineer falls back from `PRIMARY_LLM` (GPT-4o) to
-  `FALLBACK_LLM` on Groq (`openai/gpt-oss-120b` — the previous LLaMA 3.1/3.3
-  versatile models were decommissioned by Groq).
-- **Single worker**: run one uvicorn worker. Background pipelines run
-  in-process; in-flight tasks from a previous process are marked failed at
-  startup ("orphaned by server restart").
-- **Cost control**: per-task token budget (`MAX_TOKENS_PER_TASK`) hard-stops
-  the reflection loop; webhook runs require an explicit trigger label.
+- the gate rejects made-up context, broken syntax, a diff that applies but fails tests, and `../` path traversal, and leaves `git status` clean every time
+- a reviewer that says 0.99 can't pass a diff that doesn't apply, and isn't even called
+- a worse reflection never replaces a better earlier patch
+- the provider chain falls through to the next model on errors or unparseable output, counts tokens, and stops the loop when the budget is spent
+- users can't see each other's tasks, webhooks without a valid signature or the trigger label do nothing, and logins lock after 5 failures
+- the full loop on the demo repo converges in exactly one reflection and 5 LLM calls
+- the eval loop writes valid harness predictions, and one crashing instance doesn't stop the run
 
----
+## Limitations
 
-## Key Design Decisions
+- The gate's compile check covers Python only. Other languages get `git apply` plus your test command.
+- Retrieval is lexical by default. The Weaviate path adds dense vectors but currently uses OpenAI embeddings.
+- Single worker: login throttling and agent runs are in-process (no Redis or queue yet).
+- No sandbox yet: `GATE_TEST_COMMAND` runs on the host, so only use it on repos you trust.
 
-**Why LangGraph?** Gives explicit control over the agent loop — you define exactly which node runs next. Critical for the Reviewer → Reflector → Reviewer cycle.
+## License
 
-**Why Hybrid RAG?** BM25 excels at exact token matches (function names, error messages). Vector search excels at semantic similarity. RRF fusion consistently outperforms either alone on code retrieval.
-
-**Why HyDE?** Embedding "what code would fix this?" is semantically closer to actual code than embedding the issue description.
-
-**Why tree-sitter?** Preserves semantic boundaries — functions never get split mid-body. The LLM always sees complete, meaningful code units.
-
----
-
-*Built by Mirdula M — M.Tech CSE, SREC (2027)*
+MIT

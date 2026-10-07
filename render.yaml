@@ -1,0 +1,23 @@
+# One-click deploy: Render dashboard -> New -> Blueprint -> pick this repo.
+# Free plan sleeps when idle; first request after sleep takes ~30s.
+services:
+  - type: web
+    name: nexus
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: GITHUB_WEBHOOK_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false        # paste your Supabase URL (SQLite on Render's disk is wiped on redeploy)
+      - key: GROQ_API_KEY       # primary: groq/openai/gpt-oss-120b (free tier)
+        sync: false
+      - key: GOOGLE_API_KEY     # fallback: google/gemini-3.6-flash (free tier)
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false

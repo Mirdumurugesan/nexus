@@ -1,277 +1,180 @@
 """
-NEXUS SWE-bench Evaluator
-─────────────────────────
-Runs NEXUS against SWE-bench Lite (300 real GitHub issues with known fixes).
-Reports resolution rate, per-repo breakdown, and cost.
+NEXUS × SWE-bench Lite
+──────────────────────
+Runs the real pipeline (solve_issue, not the HTTP API) on SWE-bench Lite
+instances, each checked out at its exact `base_commit`.
 
-Usage:
-    export NEXUS_API_TOKEN=<jwt from POST /api/v1/auth/login>
-    python evals/swebench_eval.py --limit 10 --output results.json
+What this script measures itself (cheap, no Docker):
+  completed        pipeline ran without crashing
+  gate_pass        final patch applies at base_commit and compiles
+  file_hit         patch edits at least one file the gold patch edits
+  retrieval_hit    a gold file was among the retrieved context files
 
-The API requires authentication (engineer role). Get a token via:
-    curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
-         -H "Content-Type: application/json" \
-         -d '{"username": "<user>", "password": "<pass>"}'
+What it does NOT claim: "% resolved". That needs each repo's test environment.
+Instead it writes predictions in the official format, so you can score them
+with the SWE-bench harness:
 
-SWE-bench Lite dataset: huggingface.co/datasets/princeton-nlp/SWE-bench_Lite
+    python evals/swebench_eval.py --limit 10
+    python -m swebench.harness.run_evaluation \\
+        --dataset_name princeton-nlp/SWE-bench_Lite \\
+        --predictions_path evals/out/predictions.jsonl \\
+        --max_workers 4 --run_id nexus
+
+Instances come from HuggingFace (`pip install datasets`) or a local JSONL via
+--instances, with the same fields as the dataset.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
-import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-API_BASE = os.environ.get("NEXUS_API_BASE", "http://127.0.0.1:8000/api/v1")
-API_TOKEN = os.environ.get("NEXUS_API_TOKEN", "")
-AUTH_HEADERS = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
-POLL_INTERVAL = 5    # seconds between status polls
-MAX_WAIT = 600       # max seconds to wait per task (10 min)
+from app.tools.patch_gate import files_in_patch  # noqa: E402
 
-
-def load_swebench_lite(limit: int = 10) -> list[dict]:
-    """
-    Load SWE-bench Lite instances from HuggingFace datasets API.
-    Falls back to a small hardcoded sample if offline.
-    """
-    try:
-        from datasets import load_dataset
-        print(f"[eval] Loading SWE-bench Lite (first {limit} instances)...")
-        ds = load_dataset("princeton-nlp/SWE-bench_Lite", split="test")
-        instances = [ds[i] for i in range(min(limit, len(ds)))]
-        print(f"[eval] Loaded {len(instances)} instances")
-        return instances
-    except Exception as e:
-        print(f"[eval] Could not load dataset ({e}). Using hardcoded sample.")
-        return SAMPLE_INSTANCES[:limit]
+CACHE = Path(os.environ.get("NEXUS_REPO_CACHE", Path.home() / ".cache" / "nexus" / "repos"))
 
 
-# Hardcoded sample — used if `datasets` library not installed or offline
-SAMPLE_INSTANCES = [
-    {
-        "instance_id": "psf__requests-7443",
-        "repo": "psf/requests",
-        "issue_numbers": [7443],
-        "problem_statement": "Unexpected proxy behavior when HTTPS_PROXY is set but HTTP_PROXY is not",
-        "patch": "",  # ground truth patch
-    },
-    {
-        "instance_id": "pallets__flask-5500",
-        "repo": "pallets/flask",
-        "issue_numbers": [5500],
-        "problem_statement": "url_for fails with SERVER_NAME when using blueprints",
-        "patch": "",
-    },
-    {
-        "instance_id": "django__django-16139",
-        "repo": "django/django",
-        "issue_numbers": [16139],
-        "problem_statement": "QuerySet.bulk_create() crashes when update_fields is passed as a tuple",
-        "patch": "",
-    },
-]
+# ── data ──────────────────────────────────────────────────────────────────────
+
+def load_instances(limit: int, path: str | None = None, ids: list[str] | None = None) -> list[dict]:
+    if path:
+        with open(path, encoding="utf-8") as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+    else:
+        from datasets import load_dataset  # optional dependency
+        rows = list(load_dataset("princeton-nlp/SWE-bench_Lite", split="test"))
+    if ids:
+        rows = [r for r in rows if r["instance_id"] in set(ids)]
+    return rows[:limit]
 
 
-def build_issue_url(repo: str, issue_number: int) -> str:
-    return f"https://github.com/{repo}/issues/{issue_number}"
+def split_problem(problem: str) -> tuple[str, str]:
+    """SWE-bench problem_statement = issue title + body in one string."""
+    lines = (problem or "").strip().split("\n", 1)
+    title = lines[0].strip()[:300] or "(untitled issue)"
+    body = lines[1].strip() if len(lines) > 1 else ""
+    return title, body
 
 
-def submit_task(issue_url: str) -> str | None:
-    """Submit a task to NEXUS and return the task_id."""
-    try:
-        r = requests.post(
-            f"{API_BASE}/tasks",
-            json={"github_issue_url": issue_url, "use_hyde": True},
-            headers=AUTH_HEADERS,
-            timeout=30,
-        )
-        r.raise_for_status()
-        return r.json()["task_id"]
-    except Exception as e:
-        print(f"  [!] Submit failed: {e}")
-        return None
+# ── scoring ───────────────────────────────────────────────────────────────────
 
-
-def poll_task(task_id: str) -> dict:
-    """Poll until task is completed or failed."""
-    start = time.time()
-    last_step = ""
-    while time.time() - start < MAX_WAIT:
-        try:
-            r = requests.get(f"{API_BASE}/tasks/{task_id}", headers=AUTH_HEADERS, timeout=10)
-            task = r.json()
-            status = task["status"]
-            step = task.get("current_step", "")
-
-            if step != last_step:
-                print(f"  → {step}")
-                last_step = step
-
-            if status in ("completed", "failed"):
-                return task
-        except Exception:
-            pass
-        time.sleep(POLL_INTERVAL)
-
-    return {"status": "timeout", "task_id": task_id}
-
-
-def score_patch(nexus_patch: str, ground_truth_patch: str) -> dict:
-    """
-    Simple patch scoring:
-    - exact_match: patch is identical
-    - file_match: same files modified
-    - non_empty: patch was generated at all
-
-    In production you'd run the actual tests in a sandbox (docker).
-    """
-    if not nexus_patch:
-        return {"exact_match": False, "file_match": False, "non_empty": False, "score": 0.0}
-
-    non_empty = len(nexus_patch.strip()) > 50
-    file_match = False
-    exact_match = False
-
-    if ground_truth_patch:
-        # Extract file names from unified diffs
-        def extract_files(patch: str) -> set:
-            files = set()
-            for line in patch.split("\n"):
-                if line.startswith("+++ b/") or line.startswith("--- a/"):
-                    files.add(line.split("/", 1)[-1])
-            return files
-
-        nexus_files = extract_files(nexus_patch)
-        gt_files = extract_files(ground_truth_patch)
-        file_match = bool(nexus_files & gt_files)
-        exact_match = nexus_patch.strip() == ground_truth_patch.strip()
-
-    score = 1.0 if exact_match else (0.5 if file_match else (0.2 if non_empty else 0.0))
+def score_instance(pred_patch: str, gold_patch: str, retrieved_files: list[str]) -> dict:
+    pred = set(files_in_patch(pred_patch or ""))
+    gold = set(files_in_patch(gold_patch or ""))
     return {
-        "exact_match": exact_match,
-        "file_match": file_match,
-        "non_empty": non_empty,
-        "score": score,
+        "pred_files": sorted(pred),
+        "gold_files": sorted(gold),
+        "file_hit": bool(pred & gold),
+        "file_exact": bool(gold) and pred == gold,
+        "retrieval_hit": bool(gold & set(retrieved_files)),
     }
 
 
-def run_evaluation(limit: int = 10, output_path: str = "evals/results.json"):
-    """Main evaluation loop."""
-    if not API_TOKEN:
-        print("[eval] ERROR: NEXUS_API_TOKEN is not set. The API requires authentication.")
-        print("[eval] Login via POST /api/v1/auth/login and export NEXUS_API_TOKEN=<token>.")
-        sys.exit(1)
-
-    print("=" * 60)
-    print("  NEXUS × SWE-bench Lite Evaluation")
-    print(f"  Instances: {limit} | API: {API_BASE}")
-    print("=" * 60)
-
-    instances = load_swebench_lite(limit)
-    results = []
-    total_score = 0.0
-    resolved = 0
-
-    for i, instance in enumerate(instances):
-        repo = instance.get("repo", "")
-        instance_id = instance.get("instance_id", f"instance_{i}")
-        issue_numbers = instance.get("issue_numbers", [])
-        ground_truth = instance.get("patch", "")
-
-        if not issue_numbers:
-            print(f"\n[{i+1}/{limit}] {instance_id} — no issue number, skipping")
-            continue
-
-        issue_url = build_issue_url(repo, issue_numbers[0])
-        print(f"\n[{i+1}/{limit}] {instance_id}")
-        print(f"  URL: {issue_url}")
-
-        # Submit
-        task_id = submit_task(issue_url)
-        if not task_id:
-            results.append({"instance_id": instance_id, "status": "submit_failed", "score": 0.0})
-            continue
-
-        # Poll
-        task = poll_task(task_id)
-        status = task.get("status", "unknown")
-
-        if status != "completed":
-            print(f"  ✗ {status}")
-            results.append({
-                "instance_id": instance_id,
-                "task_id": task_id,
-                "status": status,
-                "score": 0.0,
-                "error": task.get("error_message", ""),
-            })
-            continue
-
-        # Score
-        patch = task.get("generated_patch", "") or ""
-        scoring = score_patch(patch, ground_truth)
-        total_score += scoring["score"]
-        if scoring["score"] >= 0.5:
-            resolved += 1
-
-        confidence = task.get("confidence") or 0
-        review_score = task.get("review_score") or 0
-
-        print(f"  ✓ completed | confidence={confidence:.2f} | review={review_score:.2f} | score={scoring['score']:.1f}")
-
-        results.append({
-            "instance_id": instance_id,
-            "task_id": task_id,
-            "repo": repo,
-            "status": "completed",
-            "score": scoring["score"],
-            "exact_match": scoring["exact_match"],
-            "file_match": scoring["file_match"],
-            "non_empty": scoring["non_empty"],
-            "confidence": confidence,
-            "review_score": review_score,
-            "review_passed": task.get("review_passed"),
-            "patch_length": len(patch),
-        })
-
-    # Summary
-    total = len(results)
-    avg_score = total_score / total if total else 0
-    resolution_rate = resolved / total * 100 if total else 0
-
-    summary = {
-        "run_at": datetime.utcnow().isoformat(),
-        "total_instances": total,
-        "resolved": resolved,
-        "resolution_rate_pct": round(resolution_rate, 2),
-        "avg_score": round(avg_score, 3),
-        "results": results,
+def summarize(rows: list[dict]) -> dict:
+    n = len(rows) or 1
+    pct = lambda k: round(100 * sum(1 for r in rows if r.get(k)) / n, 1)  # noqa: E731
+    secs = [r["seconds"] for r in rows if r.get("seconds")]
+    return {
+        "instances": len(rows),
+        "completed_pct": pct("completed"),
+        "gate_pass_pct": pct("gate_passed"),
+        "verified_pct": pct("passed"),
+        "file_hit_pct": pct("file_hit"),
+        "retrieval_hit_pct": pct("retrieval_hit"),
+        "avg_reflections": round(sum(r.get("reflections", 0) for r in rows) / n, 2),
+        "avg_llm_calls": round(sum(r.get("llm_calls", 0) for r in rows) / n, 1),
+        "median_seconds": sorted(secs)[len(secs) // 2] if secs else None,
     }
 
-    # Save
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
-        json.dump(summary, f, indent=2)
 
-    print("\n" + "=" * 60)
-    print(f"  RESULTS")
-    print(f"  Instances evaluated : {total}")
-    print(f"  Resolved (score≥0.5): {resolved}")
-    print(f"  Resolution rate     : {resolution_rate:.1f}%")
-    print(f"  Average score       : {avg_score:.3f}")
-    print(f"  Output saved to     : {output_path}")
-    print("=" * 60)
+# ── checkout ──────────────────────────────────────────────────────────────────
 
+def checkout_at(repo: str, base_commit: str, dest: str, repo_url: str | None = None) -> str:
+    """Full clone cached once per repo, then a cheap --shared clone per instance."""
+    url = repo_url or f"https://github.com/{repo}.git"
+    mirror = CACHE / repo.replace("/", "__")
+    if not mirror.exists():
+        mirror.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "-q", url, str(mirror)], check=True)
+    subprocess.run(["git", "clone", "-q", "--shared", str(mirror), dest], check=True)
+    r = subprocess.run(["git", "checkout", "-q", base_commit], cwd=dest)
+    if r.returncode != 0:  # commit newer than the cache
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=str(mirror), check=True)
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=dest, check=True)
+        subprocess.run(["git", "checkout", "-q", base_commit], cwd=dest, check=True)
+    return dest
+
+
+# ── main loop ─────────────────────────────────────────────────────────────────
+
+def run(instances: list[dict], out_dir: str, model_name: str = "nexus", use_hyde: bool = True) -> dict:
+    import shutil
+    import tempfile
+
+    from app.pipeline import solve_issue
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    pred_path, rows = out / "predictions.jsonl", []
+
+    with open(pred_path, "w", encoding="utf-8") as preds:
+        for i, inst in enumerate(instances, 1):
+            iid = inst["instance_id"]
+            print(f"\n[{i}/{len(instances)}] {iid}")
+            title, body = split_problem(inst["problem_statement"])
+            row: dict = {"instance_id": iid, "repo": inst["repo"], "completed": False}
+            tmp = tempfile.mkdtemp(prefix="nexus-eval-")
+            t0 = time.time()
+            try:
+                path = checkout_at(inst["repo"], inst["base_commit"], os.path.join(tmp, "repo"),
+                                   inst.get("repo_url"))
+                r = solve_issue(title, body, inst["repo"], repo_path=path, use_hyde=use_hyde, task_id=iid)
+                row.update(
+                    completed=True, passed=r.passed, gate_passed=r.gate_passed,
+                    review_score=r.review_score, reflections=r.reflections,
+                    llm_calls=r.llm_calls, seconds=r.seconds,
+                    **score_instance(r.patch, inst.get("patch", ""), r.retrieved_files),
+                )
+                patch = r.patch
+            except Exception as e:  # noqa: BLE001
+                row.update(error=f"{type(e).__name__}: {e}"[:500], seconds=round(time.time() - t0, 1))
+                patch = ""
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+
+            preds.write(json.dumps({"instance_id": iid, "model_name_or_path": model_name,
+                                    "model_patch": patch}) + "\n")
+            preds.flush()
+            rows.append(row)
+            print(f"  gate={row.get('gate_passed')} file_hit={row.get('file_hit')} "
+                  f"retrieval_hit={row.get('retrieval_hit')} {row.get('error', '')}")
+
+    summary = {"run_at": datetime.now(timezone.utc).isoformat(), "model": model_name,
+               **summarize(rows), "rows": rows}
+    (out / "results.json").write_text(json.dumps(summary, indent=2))
+    print("\n" + json.dumps({k: v for k, v in summary.items() if k != "rows"}, indent=2))
+    print(f"\nPredictions for the official harness: {pred_path}")
     return summary
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="NEXUS × SWE-bench Lite Evaluator")
-    parser.add_argument("--limit", type=int, default=10, help="Number of instances to evaluate")
-    parser.add_argument("--output", type=str, default="evals/results.json", help="Output JSON path")
-    args = parser.parse_args()
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--limit", type=int, default=10)
+    ap.add_argument("--instances", help="local JSONL instead of HuggingFace")
+    ap.add_argument("--ids", nargs="*", help="only these instance_ids")
+    ap.add_argument("--out", default="evals/out")
+    ap.add_argument("--model-name", default="nexus")
+    ap.add_argument("--no-hyde", action="store_true")
+    a = ap.parse_args()
+    run(load_instances(a.limit, a.instances, a.ids), a.out, a.model_name, use_hyde=not a.no_hyde)
 
-    run_evaluation(limit=args.limit, output_path=args.output)
+
+if __name__ == "__main__":
+    main()
