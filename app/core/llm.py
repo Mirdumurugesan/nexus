@@ -19,6 +19,8 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import logging
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Type, TypeVar
 
@@ -165,8 +167,50 @@ def _record(provider: str, model: str = "", in_tok: int = 0, out_tok: int = 0) -
 
 # ── the one entry point ──────────────────────────────────────────────────────
 
+_RATE = re.compile(r"429|rate.?limit|too many requests|resource.?exhausted|quota", re.I)
+_WAIT = re.compile(r"try again in (?:(\d+)m)?([\d.]+)s", re.I)
+
+
+def _rate_limit_wait(errors: list[str]) -> Optional[float]:
+    """If every failure was a rate limit, how long the APIs asked us to wait (else None)."""
+    if not errors or not all(_RATE.search(e) for e in errors):
+        return None
+    waits = []
+    for e in errors:
+        m = _WAIT.search(e)
+        if m:
+            waits.append(int(m.group(1) or 0) * 60 + float(m.group(2)))
+    return min(waits) + 0.5 if waits else 20.0
+
+
 def call(role: str, system: str, user: str, schema: Optional[Type[T]] = None, cheap: bool = False):
-    """Run one LLM call through the provider chain. Raises LLMUnavailable if nothing answers."""
+    """
+    Run one LLM call through the provider chain. If every provider is rate-limited,
+    sleep as long as the API asked (capped) and retry the chain. Other failures
+    are not retried. Raises LLMUnavailable if nothing answers.
+    """
+    s = get_settings()
+    for attempt in range(s.llm_rate_limit_retries + 1):
+        try:
+            return _call_once(role, system, user, schema, cheap)
+        except _ChainFailed as failed:
+            wait = _rate_limit_wait(failed.errors)
+            if wait is None or attempt == s.llm_rate_limit_retries:
+                raise LLMUnavailable(f"All LLM providers failed for {role}: " + " | ".join(failed.errors))
+            wait = min(wait, s.llm_max_wait_s)
+            logger.warning("[llm] %s: every provider rate-limited; waiting %.1fs", role, wait)
+            _sleep(wait)
+
+
+_sleep = time.sleep  # patched in tests
+
+
+class _ChainFailed(Exception):
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+
+
+def _call_once(role: str, system: str, user: str, schema, cheap: bool):
     override = _override.get()
     if override is not None:
         _record("override")
@@ -197,11 +241,11 @@ def call(role: str, system: str, user: str, schema: Optional[Type[T]] = None, ch
             _record(provider, model, int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0)))
             return (msg.content if isinstance(msg.content, str) else str(msg.content)).strip()
         except Exception as e:  # noqa: BLE001 — any provider failure moves down the chain
-            err = f"{spec}: {type(e).__name__}: {str(e)[:200]}"
+            err = f"{spec}: {type(e).__name__}: {str(e)[:300]}"
             errors.append(err)
             u = _usage.get()
             if u is not None:
                 u.failures.append(f"[{role}] {err}")
             logger.warning("[llm] %s via %s failed (%s) -> next provider", role, spec, type(e).__name__)
 
-    raise LLMUnavailable(f"All LLM providers failed for {role}: " + " | ".join(errors))
+    raise _ChainFailed(errors)

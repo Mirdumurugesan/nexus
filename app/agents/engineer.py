@@ -5,6 +5,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from app.core import llm
+from app.core.config import get_settings
 from app.agents.state import NexusState
 from app.rag.retriever import format_context_for_llm, hybrid_retrieve
 from app.tools.patch_gate import clean_patch, files_in_patch
@@ -40,7 +41,7 @@ def run_engineer(state: NexusState) -> NexusState:
         top_k=12,
         use_hyde=state.get("use_hyde", True),
     )
-    context = format_context_for_llm(retrieved, max_tokens=6000)
+    context = format_context_for_llm(retrieved, max_tokens=get_settings().context_tokens)
     retrieved_files = list(dict.fromkeys(c.file_path for c in retrieved))
 
     plan_text = "\n".join(

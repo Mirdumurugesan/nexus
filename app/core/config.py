@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     openai_api_key: str = ""
     llm_timeout_s: float = 90.0
+    # Free tiers rate-limit per minute (Groq: ~8k tokens/min per model). When every
+    # provider is rate-limited, wait the time the API asks for and retry the chain.
+    llm_rate_limit_retries: int = 3
+    llm_max_wait_s: float = 65.0
+    # Retrieved-code budget per prompt. Keep it under the provider's per-request limit.
+    context_tokens: int = 6000
     max_tokens_per_task: int = 50000   # hard budget: the agent loop stops when exhausted
 
     # ── GitHub ──

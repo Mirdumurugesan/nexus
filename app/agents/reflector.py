@@ -48,7 +48,7 @@ def run_reflector(state: NexusState) -> NexusState:
         f"## Rejected patch\n{state.get('patch', '')}\n\n"
         f"## Review (score {state.get('review_score', 0):.2f})\n{state.get('review_feedback', '')}\n"
         f"Issues:\n{issues}\n\n"
-        f"## Code context\n{state.get('retrieved_context', '')[:12000]}\n\nImproved diff:",
+        f"## Code context\n{state.get('retrieved_context', '')[:get_settings().context_tokens * 2]}\n\nImproved diff:",
         schema=ReflectorOutput,
     )
 

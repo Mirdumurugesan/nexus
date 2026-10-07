@@ -81,3 +81,39 @@ def test_override_receives_role_and_schema():
         llm.call("reviewer", "s", "u", schema=Out)
         assert llm.available()
     assert seen == [("reviewer", Out)]
+
+
+class _RateLimited(_Model):
+    def __init__(self, times):
+        super().__init__(False)
+        self.left = times
+
+    def invoke(self, messages):
+        if self.left:
+            self.left -= 1
+            raise RuntimeError("Error code: 429 - Rate limit reached. Please try again in 7.5s.")
+        return super().invoke(messages)
+
+
+def test_waits_out_rate_limits_then_succeeds(chain, monkeypatch):
+    slept = []
+    monkeypatch.setattr(llm, "_sleep", slept.append)
+    chain({"groq/a": _RateLimited(2), "groq/b": _RateLimited(2)})
+    assert llm.call("engineer", "s", "u", schema=Out).x == 7
+    assert slept == [8.0, 8.0]  # waited exactly what the API asked (+0.5s)
+
+
+def test_non_rate_limit_errors_are_not_retried(chain, monkeypatch):
+    slept = []
+    monkeypatch.setattr(llm, "_sleep", slept.append)
+    chain({"groq/a": _Model(True)})
+    with pytest.raises(llm.LLMUnavailable):
+        llm.call("engineer", "s", "u", schema=Out)
+    assert slept == []
+
+
+def test_gives_up_after_retry_budget(chain, monkeypatch):
+    monkeypatch.setattr(llm, "_sleep", lambda s: None)
+    chain({"groq/a": _RateLimited(99)})
+    with pytest.raises(llm.LLMUnavailable, match="429"):
+        llm.call("engineer", "s", "u", schema=Out)
